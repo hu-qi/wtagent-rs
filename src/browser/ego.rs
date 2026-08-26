@@ -40,6 +40,22 @@ impl EgoClient {
         Ok(client)
     }
 
+    pub async fn claim_task_space(
+        executable_override: Option<&Path>,
+        task_space: String,
+    ) -> Result<()> {
+        let client = Self {
+            executable: discover_ego(executable_override)?,
+            task_space,
+        };
+        client
+            .run_json(
+                "const __claimed = await claimTaskSpace(__task.id);\ncliLog('__WTAGENT_JSON__' + JSON.stringify({ done: true, taskSpaceId: __task.id, ownership: __claimed?.ownership ?? 'agent' }));",
+            )
+            .await?;
+        Ok(())
+    }
+
     pub fn executable(&self) -> &Path {
         &self.executable
     }
@@ -119,12 +135,9 @@ impl EgoClient {
 
         if !output.status.success() {
             let diagnostic = runtime_diagnostic(&stdout, &stderr);
-            let diagnostic_lower = diagnostic.to_ascii_lowercase();
-            if diagnostic.contains("EGO_TASK_SPACE_USER_IN_CONTROL")
-                || diagnostic_lower.contains("user is controlling")
-            {
+            if is_user_control_diagnostic(&diagnostic) {
                 return Err(WtError::Browser(
-                    "ego-lite task space is currently controlled by the user; return control to the agent and retry"
+                    "ego-lite task space is controlled by the user. If you want WTAgent-RS to resume control, run `wtagent ego claim`, then retry or resume the task."
                         .into(),
                 ));
             }
@@ -142,6 +155,15 @@ impl EgoClient {
         })?;
         serde_json::from_str(payload).map_err(WtError::Json)
     }
+}
+
+fn is_user_control_diagnostic(diagnostic: &str) -> bool {
+    let diagnostic_lower = diagnostic.to_ascii_lowercase();
+    diagnostic.contains("EGO_TASK_SPACE_USER_IN_CONTROL")
+        || diagnostic_lower.contains("user is controlling")
+        || diagnostic_lower.contains("user-owned")
+        || diagnostic_lower.contains("you now control this task space")
+        || diagnostic_lower.contains("claimtaskspace")
 }
 
 fn runtime_diagnostic(stdout: &str, stderr: &str) -> String {
@@ -221,7 +243,7 @@ pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_marked_payload, runtime_diagnostic};
+    use super::{extract_marked_payload, is_user_control_diagnostic, runtime_diagnostic};
 
     #[test]
     fn parses_original_marker() {
@@ -255,5 +277,12 @@ mod tests {
         );
         assert!(diagnostic.contains("task space is user-owned"));
         assert!(diagnostic.contains("nodejs process exited"));
+    }
+
+    #[test]
+    fn recognizes_claim_guidance_as_user_control() {
+        assert!(is_user_control_diagnostic(
+            "await claimTaskSpace(id) | You now control this task space."
+        ));
     }
 }

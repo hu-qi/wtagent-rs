@@ -74,7 +74,15 @@ Usually the app is installed but onboarding has not registered the command yet, 
 
 ### Task Space is user-controlled
 
-ego-lite explicitly separates agent control from user control. If the user takes over a Task Space in the GUI, WTAgent-RS does not silently seize it back. Finish the manual action and return control before continuing.
+ego-lite explicitly separates agent control from user control. If the user takes over a Task Space in the GUI, WTAgent-RS does not silently seize it back.
+
+After finishing the manual action, explicitly return the current provider Task Space to WTAgent-RS with:
+
+```bash
+wtagent ego claim
+```
+
+That command runs `claimTaskSpace` for the provider's stable Task Space (for example `wtagent-rs-chatgpt`). Once it succeeds, retry the task or resume the saved session. Ordinary `wtagent` tasks do not auto-claim a user-owned Task Space.
 
 ## Architectural boundary
 

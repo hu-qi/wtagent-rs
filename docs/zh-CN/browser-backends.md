@@ -84,7 +84,15 @@ wtagent doctor
 
 ### Task Space 被用户控制
 
-ego-lite 明确区分 Agent 与用户的控制权。用户在 GUI 中接管 Task Space 后，WTAgent-RS 不会偷偷夺回控制权；应先在界面中完成需要的人工操作并把控制权交回，再继续任务。
+ego-lite 明确区分 Agent 与用户的控制权。用户在 GUI 中接管 Task Space 后，WTAgent-RS 不会偷偷夺回控制权。
+
+完成需要的人工操作后，如果你明确要让 WTAgent-RS 继续，执行：
+
+```bash
+wtagent ego claim
+```
+
+该命令会对当前 Provider 对应的稳定 Task Space（例如 `wtagent-rs-chatgpt`）执行显式 `claimTaskSpace`。成功后再重试任务，或恢复之前保存的 session。普通 `wtagent` 任务不会自动 claim 用户持有的 Task Space。
 
 ## 设计边界
 
