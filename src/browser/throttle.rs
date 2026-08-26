@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rand::Rng;
+use rand::RngExt;
 use tokio::sync::Mutex;
 use tracing::debug;
 
@@ -113,7 +113,7 @@ impl RateController {
             let jitter_ms = if self.config.jitter_max.is_zero() {
                 0
             } else {
-                rand::thread_rng().gen_range(0..=self.config.jitter_max.as_millis() as u64)
+                rand::rng().random_range(0..=self.config.jitter_max.as_millis() as u64)
             };
             let desired = self.config.min_send_interval + Duration::from_millis(jitter_ms);
             delay = delay.max(desired.saturating_sub(now.saturating_duration_since(last)));
