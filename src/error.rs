@@ -32,6 +32,12 @@ pub enum WtError {
     Http(#[from] reqwest::Error),
     #[error(transparent)]
     Url(#[from] url::ParseError),
-    #[error(transparent)]
-    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+    #[error("websocket error: {0}")]
+    WebSocket(String),
+}
+
+impl From<tokio_tungstenite::tungstenite::Error> for WtError {
+    fn from(error: tokio_tungstenite::tungstenite::Error) -> Self {
+        Self::WebSocket(error.to_string())
+    }
 }
