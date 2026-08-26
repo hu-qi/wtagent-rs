@@ -16,6 +16,7 @@ use crate::{
 const OUTPUT_MARKER: &str = "__WTAGENT_JSON__";
 const OUTPUT_MARKER_CORE: &str = "WTAGENT_JSON";
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(75);
+const MAX_DIAGNOSTIC_LINES: usize = 8;
 
 pub struct EgoClient {
     executable: PathBuf,
@@ -51,7 +52,7 @@ impl EgoClient {
         let method = serde_json::to_string(method)?;
         let params = serde_json::to_string(&params)?;
         self.run_json(&format!(
-            "const __result = await cdp({method}, {params});\nconsole.log('{OUTPUT_MARKER}' + JSON.stringify(__result ?? {{}}));"
+            "const __result = await cdp({method}, {params});\ncliLog('{OUTPUT_MARKER}' + JSON.stringify(__result ?? {{}}));"
         ))
         .await
     }
@@ -60,7 +61,7 @@ impl EgoClient {
         let timeout_secs = timeout.as_secs().max(1);
         self.run_json_with_timeout(
             &format!(
-                "const __handoff = await handOffTaskSpace(__task.id);\nif (__handoff?.done) {{\n  await waitForAgentControl(__task.id, {{ interval: 1, timeout: {timeout_secs} }});\n}}\nconsole.log('{OUTPUT_MARKER}' + JSON.stringify({{ done: true, taskSpaceId: __task.id }}));"
+                "const __handoff = await handOffTaskSpace(__task.id);\nif (__handoff?.done) {{\n  await waitForAgentControl(__task.id, {{ interval: 1, timeout: {timeout_secs} }});\n}}\ncliLog('{OUTPUT_MARKER}' + JSON.stringify({{ done: true, taskSpaceId: __task.id }}));"
             ),
             timeout.saturating_add(Duration::from_secs(15)),
         )
@@ -71,7 +72,7 @@ impl EgoClient {
     async fn ensure_page(&self, url: &str) -> Result<()> {
         let url = serde_json::to_string(url)?;
         self.run_json(&format!(
-            "const __tab = await openOrReuseTab({url}, {{ wait: true, timeout: 60 }});\nconsole.log('{OUTPUT_MARKER}' + JSON.stringify({{ ok: true, targetId: __tab?.targetId ?? null }}));"
+            "const __tab = await openOrReuseTab({url}, {{ wait: true, timeout: 60 }});\ncliLog('{OUTPUT_MARKER}' + JSON.stringify({{ ok: true, targetId: __tab?.targetId ?? null }}));"
         ))
         .await?;
         Ok(())
@@ -117,34 +118,46 @@ impl EgoClient {
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         if !output.status.success() {
-            let detail = stderr
-                .lines()
-                .rev()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or("ego-browser exited unsuccessfully");
-            if detail.contains("EGO_TASK_SPACE_USER_IN_CONTROL")
-                || detail.to_ascii_lowercase().contains("user is controlling")
+            let diagnostic = runtime_diagnostic(&stdout, &stderr);
+            let diagnostic_lower = diagnostic.to_ascii_lowercase();
+            if diagnostic.contains("EGO_TASK_SPACE_USER_IN_CONTROL")
+                || diagnostic_lower.contains("user is controlling")
             {
                 return Err(WtError::Browser(
                     "ego-lite task space is currently controlled by the user; return control to the agent and retry"
                         .into(),
                 ));
             }
-            return Err(WtError::Browser(format!("ego-browser failed: {detail}")));
+            return Err(WtError::Browser(format!(
+                "ego-browser failed (exit={}): {diagnostic}",
+                output.status
+            )));
         }
 
         let payload = extract_marked_payload(&stdout).ok_or_else(|| {
             WtError::Browser(format!(
-                "ego-browser produced no WTAgent result{}",
-                if stderr.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!(": {}", stderr.trim())
-                }
+                "ego-browser produced no WTAgent result: {}",
+                runtime_diagnostic(&stdout, &stderr)
             ))
         })?;
         serde_json::from_str(payload).map_err(WtError::Json)
     }
+}
+
+fn runtime_diagnostic(stdout: &str, stderr: &str) -> String {
+    let mut lines: Vec<&str> = stderr
+        .lines()
+        .chain(stdout.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return "ego-browser exited without diagnostic output".into();
+    }
+    if lines.len() > MAX_DIAGNOSTIC_LINES {
+        lines.drain(..lines.len() - MAX_DIAGNOSTIC_LINES);
+    }
+    lines.join(" | ")
 }
 
 fn extract_marked_payload(stdout: &str) -> Option<&str> {
@@ -208,7 +221,7 @@ pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_marked_payload;
+    use super::{extract_marked_payload, runtime_diagnostic};
 
     #[test]
     fn parses_original_marker() {
@@ -232,5 +245,15 @@ mod tests {
             extract_marked_payload("warning: expected WTAGENT_JSON marker"),
             None
         );
+    }
+
+    #[test]
+    fn keeps_useful_runtime_error_context() {
+        let diagnostic = runtime_diagnostic(
+            "some stdout\n",
+            "Error: task space is user-owned\nego's nodejs process exited with code 1\n",
+        );
+        assert!(diagnostic.contains("task space is user-owned"));
+        assert!(diagnostic.contains("nodejs process exited"));
     }
 }
