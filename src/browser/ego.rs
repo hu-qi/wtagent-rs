@@ -109,7 +109,7 @@ impl EgoClient {
             task_space = %self.task_space,
             timeout_ms = timeout.as_millis(),
             script_len = script.len(),
-            parser = "normalized-marker-v2",
+            parser = "normalized-marker-v3-stream-aware",
             "ego command start"
         );
 
@@ -166,13 +166,17 @@ impl EgoClient {
             )));
         }
 
-        let payload = extract_marked_payload(&stdout).ok_or_else(|| {
+        let (source, payload) = extract_result_payload(&stdout, &stderr).ok_or_else(|| {
             WtError::Browser(format!(
                 "ego-browser produced no WTAgent result: {}",
                 runtime_diagnostic(&stdout, &stderr)
             ))
         })?;
-        debug!(payload_len = payload.len(), "ego WTAgent payload matched");
+        debug!(
+            source,
+            payload_len = payload.len(),
+            "ego WTAgent payload matched"
+        );
         serde_json::from_str(payload).map_err(WtError::Json)
     }
 }
@@ -202,8 +206,14 @@ fn runtime_diagnostic(stdout: &str, stderr: &str) -> String {
     lines.join(" | ")
 }
 
-fn extract_marked_payload(stdout: &str) -> Option<&str> {
-    stdout.lines().rev().find_map(|line| {
+fn extract_result_payload<'a>(stdout: &'a str, stderr: &'a str) -> Option<(&'static str, &'a str)> {
+    extract_marked_payload(stdout)
+        .map(|payload| ("stdout", payload))
+        .or_else(|| extract_marked_payload(stderr).map(|payload| ("stderr", payload)))
+}
+
+fn extract_marked_payload(stream: &str) -> Option<&str> {
+    stream.lines().rev().find_map(|line| {
         let line = line.trim();
         let Some(json_at) = line.find('{') else {
             debug!(line = %line.escape_debug(), "ego parser skipped line without JSON object");
@@ -297,8 +307,8 @@ pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_excerpt, extract_marked_payload, is_user_control_diagnostic, normalize_marker,
-        runtime_diagnostic,
+        debug_excerpt, extract_marked_payload, extract_result_payload, is_user_control_diagnostic,
+        normalize_marker, runtime_diagnostic,
     };
 
     #[test]
@@ -332,6 +342,31 @@ mod tests {
                 r#"\_\_WTAGENT\_JSON\_\_{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}"#,
             ),
             Some(r#"{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}"#)
+        );
+    }
+
+    #[test]
+    fn parses_result_from_stderr_when_stdout_is_empty() {
+        assert_eq!(
+            extract_result_payload(
+                "",
+                "**WTAGENT\\_JSON**{\"ok\":true,\"targetId\":\"FA61691809ACEDE7926D4C148184B16B\"}\n\n",
+            ),
+            Some((
+                "stderr",
+                "{\"ok\":true,\"targetId\":\"FA61691809ACEDE7926D4C148184B16B\"}"
+            ))
+        );
+    }
+
+    #[test]
+    fn prefers_stdout_result_when_both_streams_contain_markers() {
+        assert_eq!(
+            extract_result_payload(
+                "__WTAGENT_JSON__{\"source\":\"stdout\"}",
+                "__WTAGENT_JSON__{\"source\":\"stderr\"}",
+            ),
+            Some(("stdout", "{\"source\":\"stdout\"}"))
         );
     }
 
