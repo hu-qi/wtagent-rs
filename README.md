@@ -4,7 +4,7 @@
 >
 > `WTAgent-RS` is an independent Rust implementation. It preserves the MIT attribution of the upstream project and focuses on reliability, lower web-turn volume, cross-platform binaries, and conservative handling of provider limits.
 
-[中文文档](./README.zh-CN.md) · [English Documentation](./README.en.md) · [浏览器后端 / Browser Backends](./docs/zh-CN/browser-backends.md) · [架构 / Architecture](./docs/zh-CN/architecture.md) · [限制与稳定性 / Limits & Reliability](./docs/zh-CN/limits-and-reliability.md)
+[中文文档](./README.zh-CN.md) · [English Documentation](./README.en.md) · [ChatGPT Projects 中文](./docs/zh-CN/chatgpt-projects.md) · [ChatGPT Projects English](./docs/en/chatgpt-projects.md) · [浏览器后端 / Browser Backends](./docs/zh-CN/browser-backends.md) · [架构 / Architecture](./docs/zh-CN/architecture.md) · [限制与稳定性 / Limits & Reliability](./docs/zh-CN/limits-and-reliability.md)
 
 ## Why Rust / 为什么用 Rust
 
@@ -32,7 +32,7 @@ See [中文：浏览器后端](./docs/zh-CN/browser-backends.md) or [English: Br
 
 | Provider | Web endpoint | Browser state | Default behavior |
 | --- | --- | --- | --- |
-| ChatGPT | `chatgpt.com` | ego Task Space or dedicated Chrome profile | Keep current mode unless requested |
+| ChatGPT | `chatgpt.com` | ego Task Space or dedicated Chrome profile | Keep current mode unless requested; can target a ChatGPT Project |
 | Claude | `claude.ai` | ego Task Space or dedicated Chrome profile | Keep site-selected model |
 | DeepSeek | `chat.deepseek.com` | ego Task Space or dedicated Chrome profile | Prefer Expert + Deep Thinking |
 | Gemini | `gemini.google.com` | ego Task Space or dedicated Chrome profile | Keep site-selected model |
@@ -58,14 +58,33 @@ wtagent --model claude "inspect this repository and summarize its architecture"
 wtagent --model gemini "find the failing tests and explain the root cause"
 ```
 
+Create a new ChatGPT conversation inside a specific ChatGPT Project:
+
+```bash
+wtagent chatgpt projects
+wtagent --model chatgpt --chatgpt-project "OpenSource" "inspect this repository"
+```
+
+For automation, prefer the stable Project URL:
+
+```bash
+wtagent --model chatgpt \
+  --chatgpt-project "https://chatgpt.com/g/g-p-<project-id>-<slug>/project" \
+  "inspect this repository"
+```
+
+The selected Project binding is persisted in the WTAgent session. `session resume` continues the resulting Project chat rather than creating another one. See [中文说明](./docs/zh-CN/chatgpt-projects.md) or [English guide](./docs/en/chatgpt-projects.md).
+
 Useful commands:
 
 ```bash
 wtagent doctor
 wtagent providers
 wtagent login --model chatgpt
-wtagent sessions
-wtagent resume <SESSION_ID> "continue and run the tests"
+wtagent chatgpt projects
+wtagent session
+wtagent session continue
+wtagent session resume <SESSION_ID> "continue and run the tests"
 ```
 
 With ego-lite available on macOS, WTAgent-RS opens/reuses a dedicated Task Space such as `wtagent-rs-chatgpt` and can reuse the user's existing login state. Without ego-lite it opens a dedicated visible Chrome/Chromium profile. Credentials remain in the selected browser; WTAgent-RS does not ask for or store provider passwords.

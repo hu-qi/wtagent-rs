@@ -95,7 +95,8 @@ impl AgentRuntime {
             .append_event("runtime.initializing", json!({"resume": resume}))
             .await?;
 
-        let preferred = if resume {
+        let project_seed = !resume && self.session.state.chatgpt_project.is_some();
+        let preferred = if resume || project_seed {
             self.session.state.conversation_url.as_deref()
         } else {
             None
@@ -114,7 +115,7 @@ impl AgentRuntime {
         }
 
         self.adapter
-            .start_conversation(if resume {
+            .start_conversation(if resume || project_seed {
                 self.session.state.conversation_url.as_deref()
             } else {
                 None
@@ -128,7 +129,8 @@ impl AgentRuntime {
                 json!({
                     "url": self.adapter.conversation_url().await?,
                     "mode": active_mode,
-                    "provider": self.adapter.provider_label()
+                    "provider": self.adapter.provider_label(),
+                    "chatgpt_project": self.session.state.chatgpt_project
                 }),
             )
             .await?;
