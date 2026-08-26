@@ -14,8 +14,6 @@ use crate::{
 };
 
 const OUTPUT_MARKER: &str = "__WTAGENT_JSON__";
-const OUTPUT_MARKER_CORE: &str = "WTAGENT_JSON";
-const OUTPUT_MARKER_CORE_ESCAPED: &str = r"WTAGENT\_JSON";
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(75);
 const MAX_DIAGNOSTIC_LINES: usize = 8;
 
@@ -186,36 +184,36 @@ fn runtime_diagnostic(stdout: &str, stderr: &str) -> String {
 fn extract_marked_payload(stdout: &str) -> Option<&str> {
     stdout.lines().rev().find_map(|line| {
         let line = line.trim();
-        let (marker_at, marker_len) = find_marker_core(line)?;
-        let prefix = &line[..marker_at];
-        if !prefix
-            .chars()
-            .all(|ch| ch.is_whitespace() || matches!(ch, '_' | '*' | '`'))
-        {
+        let json_at = line.find('{')?;
+        let marker = line[..json_at].trim();
+        let normalized = normalize_marker(marker);
+
+        if !matches!(
+            normalized.as_str(),
+            "__WTAGENT_JSON__" | "**WTAGENT_JSON**" | "WTAGENT_JSON"
+        ) {
             return None;
         }
 
-        let payload = line[marker_at + marker_len..].trim_start_matches(|ch: char| {
-            ch.is_whitespace() || matches!(ch, '_' | '*' | '`' | ':')
-        });
-        (!payload.is_empty()).then_some(payload)
+        Some(&line[json_at..])
     })
 }
 
-fn find_marker_core(line: &str) -> Option<(usize, usize)> {
-    let plain = line
-        .find(OUTPUT_MARKER_CORE)
-        .map(|index| (index, OUTPUT_MARKER_CORE.len()));
-    let escaped = line
-        .find(OUTPUT_MARKER_CORE_ESCAPED)
-        .map(|index| (index, OUTPUT_MARKER_CORE_ESCAPED.len()));
+fn normalize_marker(marker: &str) -> String {
+    let mut normalized = String::with_capacity(marker.len());
+    let mut chars = marker.chars().peekable();
 
-    match (plain, escaped) {
-        (Some(plain), Some(escaped)) => Some(if plain.0 <= escaped.0 { plain } else { escaped }),
-        (Some(plain), None) => Some(plain),
-        (None, Some(escaped)) => Some(escaped),
-        (None, None) => None,
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && matches!(chars.peek(), Some('_' | '*' | '`')) {
+            if let Some(escaped) = chars.next() {
+                normalized.push(escaped);
+            }
+            continue;
+        }
+        normalized.push(ch);
     }
+
+    normalized
 }
 
 pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
@@ -259,7 +257,9 @@ pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_marked_payload, is_user_control_diagnostic, runtime_diagnostic};
+    use super::{
+        extract_marked_payload, is_user_control_diagnostic, normalize_marker, runtime_diagnostic,
+    };
 
     #[test]
     fn parses_original_marker() {
@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_markdown_escaped_marker_from_ego_browser() {
+    fn parses_markdown_escaped_inner_underscore() {
         assert_eq!(
             extract_marked_payload(r#"**WTAGENT\_JSON**{"done":true,"ownership":"agent"}"#),
             Some(r#"{"done":true,"ownership":"agent"}"#)
@@ -286,9 +286,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_fully_markdown_escaped_marker_seen_in_ego_browser() {
+        assert_eq!(
+            extract_marked_payload(
+                r#"\_\_WTAGENT\_JSON\_\_{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}"#,
+            ),
+            Some(r#"{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}"#)
+        );
+    }
+
+    #[test]
+    fn normalizes_only_markdown_marker_escapes() {
+        assert_eq!(
+            normalize_marker(r"\_\_WTAGENT\_JSON\_\_"),
+            "__WTAGENT_JSON__"
+        );
+    }
+
+    #[test]
     fn ignores_marker_mentions_in_prose() {
         assert_eq!(
-            extract_marked_payload("warning: expected WTAGENT_JSON marker"),
+            extract_marked_payload("warning: expected WTAGENT_JSON marker {not-json}"),
             None
         );
     }
