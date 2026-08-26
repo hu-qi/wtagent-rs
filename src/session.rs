@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     browser::provider::ProviderId,
+    chatgpt_project::ChatGptProjectBinding,
     error::{Result, WtError},
     tools::ToolResult,
 };
@@ -40,6 +41,8 @@ pub struct SessionState {
     pub task: String,
     pub phase: String,
     pub conversation_url: Option<String>,
+    #[serde(default)]
+    pub chatgpt_project: Option<ChatGptProjectBinding>,
     pub last_assistant_id: Option<String>,
     pub active_mode: Option<String>,
     pub turn: u64,
@@ -76,6 +79,7 @@ impl SessionStore {
             task,
             phase: "created".into(),
             conversation_url: None,
+            chatgpt_project: None,
             last_assistant_id: None,
             active_mode: None,
             turn: 0,
@@ -320,6 +324,29 @@ mod tests {
         let id = store.state.session_id.clone();
         let loaded = SessionStore::load(temp.path(), &id).await.unwrap();
         assert_eq!(loaded.state.phase, "running");
+        assert!(loaded.state.chatgpt_project.is_none());
+    }
+
+    #[tokio::test]
+    async fn loads_legacy_session_without_project_binding() {
+        let raw = r#"{
+            "schema_version":1,
+            "session_id":"legacy",
+            "provider":"chatgpt",
+            "project_root":"/tmp/project",
+            "task":"test",
+            "phase":"idle",
+            "conversation_url":null,
+            "last_assistant_id":null,
+            "active_mode":null,
+            "turn":0,
+            "last_message":null,
+            "created_at_ms":0,
+            "updated_at_ms":0,
+            "effects":{}
+        }"#;
+        let state: SessionState = serde_json::from_str(raw).unwrap();
+        assert!(state.chatgpt_project.is_none());
     }
 
     #[tokio::test]
