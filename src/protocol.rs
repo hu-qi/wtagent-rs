@@ -44,7 +44,6 @@ pub fn parse_agent_response(raw: &str) -> Result<AgentResponse> {
 
     let mut tool_calls = Vec::new();
     for node in root.descendants().filter(|n| n.has_tag_name("tool_call")) {
-        // Only accept tool_call elements directly under tool_calls or the root.
         let parent_name = node.parent_element().map(|p| p.tag_name().name());
         if !matches!(parent_name, Some("tool_calls") | Some("agent_response")) {
             continue;
@@ -113,7 +112,6 @@ fn xml_node_to_json(node: roxmltree::Node<'_, '_>) -> Value {
         return scalar(node.text().unwrap_or_default().trim());
     }
 
-    // XML arrays produced by the original WTAgent use <item> children.
     if children.iter().all(|child| child.has_tag_name("item")) {
         return Value::Array(children.into_iter().map(xml_node_to_json).collect());
     }
@@ -196,6 +194,8 @@ Rules:
 - Never ask to bypass a CAPTCHA, anti-bot challenge, usage limit, or provider policy. The runtime will stop and return control to the user.
 - Available tools: fs.list, fs.read, fs.search, fs.write, fs.edit, terminal.exec, process.start, process.read, process.list, process.stop.
 - terminal.exec takes a program and argv array; do not send a shell command string.
+- <args> JSON must be strict JSON. Never place literal newlines, tabs, carriage returns, or other control characters inside quoted JSON strings; use JSON escapes only when such characters are intentional.
+- Keep scalar argv/path/url values free of accidental leading or trailing whitespace and control characters.
 - Keep tool output requests narrow; large results are deterministically compacted before being sent back.
 "#
     )
@@ -208,9 +208,15 @@ pub fn build_follow_up(instruction: &str) -> String {
 }
 
 pub fn build_protocol_correction(error: &str) -> String {
+    let detail = truncate_chars(error, 240);
+    if error.contains("tool args JSON is invalid") || error.contains("control character") {
+        return format!(
+            "The previous WTAgent tool request used invalid JSON in <args>: {detail}. Re-emit the intended request once using one complete <agent_response> envelope and strict JSON. Do not place literal newlines, tabs, carriage returns, or other control characters inside quoted JSON strings. For argv/path/url strings, remove accidental leading or trailing whitespace/control characters. Do not repeat any local side effect whose successful result is already visible."
+        );
+    }
+
     format!(
-        "The previous reply attempted WTAgent XML but could not be parsed: {}. Reply once more with one complete <agent_response> envelope. Do not repeat any local side effect whose result is already visible.",
-        truncate_chars(error, 240)
+        "The previous reply attempted WTAgent XML but could not be parsed: {detail}. Reply once more with one complete <agent_response> envelope. Do not repeat any local side effect whose result is already visible."
     )
 }
 
@@ -264,5 +270,30 @@ mod tests {
     fn extracts_envelope_from_markdown_noise() {
         let raw = "prefix\n```xml\n<agent_response><message>done</message><done>true</done></agent_response>\n```";
         assert!(parse_agent_response(raw).unwrap().done);
+    }
+
+    #[test]
+    fn rejects_literal_newline_inside_json_string() {
+        let raw = "<agent_response><message>x</message><done>false</done><tool_calls><tool_call name=\"terminal.exec\"><args>{\"program\":\"curl\",\"argv\":[\"https://example.test/\n\"]}</args></tool_call></tool_calls></agent_response>";
+        let error = parse_agent_response(raw).unwrap_err().to_string();
+        assert!(error.contains("tool args JSON is invalid"));
+        assert!(error.contains("control character"));
+    }
+
+    #[test]
+    fn control_character_error_gets_actionable_correction() {
+        let correction = build_protocol_correction(
+            "tool args JSON is invalid: control character (\\u0000-\\u001F) found while parsing a string at line 2 column 0",
+        );
+        assert!(correction.contains("strict JSON"));
+        assert!(correction.contains("literal newlines"));
+        assert!(correction.contains("argv/path/url"));
+    }
+
+    #[test]
+    fn bootstrap_warns_against_control_characters_in_tool_json() {
+        let prompt = build_bootstrap_prompt("task", "/tmp/project");
+        assert!(prompt.contains("<args> JSON must be strict JSON"));
+        assert!(prompt.contains("argv/path/url"));
     }
 }
