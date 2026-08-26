@@ -156,9 +156,9 @@ async fn discover_projects(page: &ChromePage) -> Result<Vec<ChatGptProjectBindin
 }
 
 fn projects_from_value(value: Value) -> Result<Vec<ChatGptProjectBinding>> {
-    let array = value
-        .as_array()
-        .ok_or_else(|| WtError::Browser("ChatGPT Project discovery returned a non-array value".into()))?;
+    let array = value.as_array().ok_or_else(|| {
+        WtError::Browser("ChatGPT Project discovery returned a non-array value".into())
+    })?;
     let mut projects = Vec::with_capacity(array.len());
     for item in array {
         let url = item.get("url").and_then(Value::as_str).unwrap_or_default();
