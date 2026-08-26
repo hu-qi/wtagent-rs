@@ -16,10 +16,14 @@ use tracing::{debug, warn};
 
 use crate::error::{Result, WtError};
 
+type CdpResponse = std::result::Result<Value, String>;
+type PendingResponse = oneshot::Sender<CdpResponse>;
+type PendingMap = Arc<Mutex<HashMap<u64, PendingResponse>>>;
+
 #[derive(Clone)]
 pub struct CdpClient {
     tx: mpsc::Sender<Message>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<std::result::Result<Value, String>>>>>,
+    pending: PendingMap,
     next_id: Arc<AtomicU64>,
 }
 
@@ -28,8 +32,7 @@ impl CdpClient {
         let (stream, _) = connect_async(ws_url).await?;
         let (mut sink, mut source) = stream.split();
         let (tx, mut rx) = mpsc::channel::<Message>(128);
-        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<std::result::Result<Value, String>>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
 
         tokio::spawn(async move {
             while let Some(message) = rx.recv().await {
@@ -377,9 +380,6 @@ impl CdpClient {
             .get("data")
             .and_then(Value::as_str)
             .ok_or_else(|| WtError::Browser("screenshot response did not contain data".into()))?;
-        // Keep base64 decoding out of the hot path and dependency graph: Chrome
-        // diagnostics are best effort, so write the encoded payload with an
-        // explicit suffix when raw decoding is unavailable.
         tokio::fs::write(path.with_extension("png.base64"), data).await?;
         debug!(path = %path.display(), "saved base64 screenshot diagnostics");
         Ok(())
