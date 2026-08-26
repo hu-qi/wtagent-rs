@@ -111,6 +111,14 @@ enum EgoCommands {
 async fn main() {
     let cli = parse_cli_with_bare_task();
     init_tracing(cli.debug);
+    if cli.debug {
+        eprintln!(
+            "debug: wtagent version={} pid={} binary={}",
+            env!("CARGO_PKG_VERSION"),
+            std::process::id(),
+            current_executable_display()
+        );
+    }
     if let Err(error) = run(cli).await {
         eprintln!("error: {error}");
         match error {
@@ -279,6 +287,8 @@ async fn doctor(cli: &Cli) -> Result<()> {
     let provider = cli.model.unwrap_or_default();
     let config = configured(cli, provider, cli.project.clone())?;
     println!("WTAgent-RS doctor");
+    println!("  version: {}", env!("CARGO_PKG_VERSION"));
+    println!("  binary: {}", current_executable_display());
     println!("  project: {}", config.project_root.display());
     println!(
         "  provider: {} ({})",
@@ -310,6 +320,12 @@ async fn doctor(cli: &Cli) -> Result<()> {
     println!("  anti-bot policy: manual challenge only; no CAPTCHA bypass/fingerprint spoofing/account rotation");
     println!("status: OK");
     Ok(())
+}
+
+fn current_executable_display() -> String {
+    std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|error| format!("<unavailable: {error}>"))
 }
 
 fn ego_task_space(provider: ProviderId) -> String {

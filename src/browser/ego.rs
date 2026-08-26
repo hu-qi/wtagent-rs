@@ -7,6 +7,7 @@ use std::{
 
 use serde_json::Value;
 use tokio::{io::AsyncWriteExt, process::Command};
+use tracing::debug;
 
 use crate::{
     browser::provider::ProviderConfig,
@@ -16,6 +17,7 @@ use crate::{
 const OUTPUT_MARKER: &str = "__WTAGENT_JSON__";
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(75);
 const MAX_DIAGNOSTIC_LINES: usize = 8;
+const MAX_DEBUG_EXCERPT_CHARS: usize = 2_048;
 
 pub struct EgoClient {
     executable: PathBuf,
@@ -102,6 +104,15 @@ impl EgoClient {
         let task_space = serde_json::to_string(&self.task_space)?;
         let script = format!("const __task = await useOrCreateTaskSpace({task_space});\n{code}\n");
 
+        debug!(
+            executable = %self.executable.display(),
+            task_space = %self.task_space,
+            timeout_ms = timeout.as_millis(),
+            script_len = script.len(),
+            parser = "normalized-marker-v2",
+            "ego command start"
+        );
+
         let mut child = Command::new(&self.executable)
             .arg("nodejs")
             .stdin(Stdio::piped())
@@ -132,6 +143,15 @@ impl EgoClient {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
+        debug!(
+            status = %output.status,
+            stdout_len = output.stdout.len(),
+            stderr_len = output.stderr.len(),
+            stdout = %debug_excerpt(&stdout),
+            stderr = %debug_excerpt(&stderr),
+            "ego command completed"
+        );
+
         if !output.status.success() {
             let diagnostic = runtime_diagnostic(&stdout, &stderr);
             if is_user_control_diagnostic(&diagnostic) {
@@ -152,6 +172,7 @@ impl EgoClient {
                 runtime_diagnostic(&stdout, &stderr)
             ))
         })?;
+        debug!(payload_len = payload.len(), "ego WTAgent payload matched");
         serde_json::from_str(payload).map_err(WtError::Json)
     }
 }
@@ -184,18 +205,27 @@ fn runtime_diagnostic(stdout: &str, stderr: &str) -> String {
 fn extract_marked_payload(stdout: &str) -> Option<&str> {
     stdout.lines().rev().find_map(|line| {
         let line = line.trim();
-        let json_at = line.find('{')?;
+        let Some(json_at) = line.find('{') else {
+            debug!(line = %line.escape_debug(), "ego parser skipped line without JSON object");
+            return None;
+        };
         let marker = line[..json_at].trim();
         let normalized = normalize_marker(marker);
-
-        if !matches!(
+        let accepted = matches!(
             normalized.as_str(),
             "__WTAGENT_JSON__" | "**WTAGENT_JSON**" | "WTAGENT_JSON"
-        ) {
-            return None;
-        }
+        );
 
-        Some(&line[json_at..])
+        debug!(
+            line = %line.escape_debug(),
+            marker = %marker.escape_debug(),
+            normalized_marker = %normalized.escape_debug(),
+            json_at,
+            accepted,
+            "ego parser inspected result line"
+        );
+
+        accepted.then_some(&line[json_at..])
     })
 }
 
@@ -214,6 +244,15 @@ fn normalize_marker(marker: &str) -> String {
     }
 
     normalized
+}
+
+fn debug_excerpt(value: &str) -> String {
+    let mut escaped = value.escape_debug().to_string();
+    if escaped.chars().count() > MAX_DEBUG_EXCERPT_CHARS {
+        escaped = escaped.chars().take(MAX_DEBUG_EXCERPT_CHARS).collect();
+        escaped.push_str("…<truncated>");
+    }
+    escaped
 }
 
 pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
@@ -258,7 +297,8 @@ pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_marked_payload, is_user_control_diagnostic, normalize_marker, runtime_diagnostic,
+        debug_excerpt, extract_marked_payload, is_user_control_diagnostic, normalize_marker,
+        runtime_diagnostic,
     };
 
     #[test]
@@ -326,5 +366,10 @@ mod tests {
         assert!(is_user_control_diagnostic(
             "await claimTaskSpace(id) | You now control this task space."
         ));
+    }
+
+    #[test]
+    fn debug_excerpt_escapes_control_characters() {
+        assert_eq!(debug_excerpt("a\r\nb"), "a\\r\\nb");
     }
 }
