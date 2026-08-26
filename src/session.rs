@@ -259,9 +259,9 @@ pub async fn delete_session(app_data_dir: &Path, session_id: &str) -> Result<()>
     let directory = app_data_dir.join("sessions").join(session_id);
     match tokio::fs::remove_dir_all(&directory).await {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(WtError::Session(format!(
-            "cannot delete session {session_id}: session does not exist"
-        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(WtError::Session(
+            format!("cannot delete session {session_id}: session does not exist"),
+        )),
         Err(error) => Err(error.into()),
     }
 }
