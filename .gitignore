@@ -1,0 +1,10 @@
+/target/
+**/*.rs.bk
+.DS_Store
+.idea/
+.vscode/
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
