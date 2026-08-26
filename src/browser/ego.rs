@@ -17,6 +17,7 @@ use crate::{
 };
 
 const OUTPUT_MARKER: &str = "__WTAGENT_JSON__";
+const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(75);
 
 pub struct EgoClient {
     executable: PathBuf,
@@ -59,9 +60,12 @@ impl EgoClient {
 
     pub async fn handoff_for_manual_login(&self, timeout: Duration) -> Result<()> {
         let timeout_secs = timeout.as_secs().max(1);
-        self.run_json(&format!(
-            "const __handoff = await handOffTaskSpace(__task.id);\nif (__handoff?.done) {{\n  await waitForAgentControl(__task.id, {{ interval: 1, timeout: {timeout_secs} }});\n}}\nconsole.log('{OUTPUT_MARKER}' + JSON.stringify({{ done: true, taskSpaceId: __task.id }}));"
-        ))
+        self.run_json_with_timeout(
+            &format!(
+                "const __handoff = await handOffTaskSpace(__task.id);\nif (__handoff?.done) {{\n  await waitForAgentControl(__task.id, {{ interval: 1, timeout: {timeout_secs} }});\n}}\nconsole.log('{OUTPUT_MARKER}' + JSON.stringify({{ done: true, taskSpaceId: __task.id }}));"
+            ),
+            timeout.saturating_add(Duration::from_secs(15)),
+        )
         .await?;
         Ok(())
     }
@@ -76,6 +80,10 @@ impl EgoClient {
     }
 
     async fn run_json(&self, code: &str) -> Result<Value> {
+        self.run_json_with_timeout(code, DEFAULT_COMMAND_TIMEOUT).await
+    }
+
+    async fn run_json_with_timeout(&self, code: &str, timeout: Duration) -> Result<Value> {
         let task_space = serde_json::to_string(&self.task_space)?;
         let script = format!(
             "const __task = await useOrCreateTaskSpace({task_space});\n{code}\n"
@@ -100,9 +108,14 @@ impl EgoClient {
             stdin.shutdown().await?;
         }
 
-        let output = tokio::time::timeout(Duration::from_secs(75), child.wait_with_output())
+        let output = tokio::time::timeout(timeout, child.wait_with_output())
             .await
-            .map_err(|_| WtError::Browser("ego-browser command timed out".into()))??;
+            .map_err(|_| {
+                WtError::Browser(format!(
+                    "ego-browser command timed out after {} seconds",
+                    timeout.as_secs()
+                ))
+            })??;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
