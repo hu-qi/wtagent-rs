@@ -3,7 +3,7 @@ use std::{path::PathBuf, time::Duration};
 use clap::ValueEnum;
 
 use crate::{
-    browser::{backend::BrowserBackend, provider::ProviderId},
+    browser::provider::ProviderId,
     error::{Result, WtError},
 };
 
@@ -72,10 +72,7 @@ pub struct AppConfig {
     pub provider: ProviderId,
     pub mode: Option<String>,
     pub project_root: PathBuf,
-    pub browser_backend: BrowserBackend,
     pub chrome_path: Option<PathBuf>,
-    pub ego_path: Option<PathBuf>,
-    pub ego_task_space: Option<String>,
     pub minimized: bool,
     pub approval: ApprovalMode,
     pub rate: RateConfig,
@@ -94,10 +91,7 @@ impl AppConfig {
             provider,
             mode: None,
             project_root,
-            browser_backend: BrowserBackend::Auto,
             chrome_path: None,
-            ego_path: None,
-            ego_task_space: None,
             minimized: false,
             approval: ApprovalMode::Ask,
             rate: RateConfig::default(),
