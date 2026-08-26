@@ -48,7 +48,7 @@ jobs:
           Copy-Item "${{ matrix.binary }}" "dist/wtagent.exe"
           Copy-Item README.md,README.zh-CN.md,README.en.md,LICENSE,NOTICE.md dist/
           Compress-Archive -Path dist/* -DestinationPath "${{ matrix.artifact }}.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: |
