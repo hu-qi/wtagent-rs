@@ -256,11 +256,8 @@ async fn doctor(cli: &Cli) -> Result<()> {
     println!("  data dir: {}", config.app_data_dir.display());
     println!("  profile: {}", config.profile_dir().display());
     tokio::fs::create_dir_all(&config.app_data_dir).await?;
-    let backend = resolve_browser_backend(
-        BrowserBackend::Auto,
-        config.chrome_path.as_deref(),
-        None,
-    )?;
+    let backend =
+        resolve_browser_backend(BrowserBackend::Auto, config.chrome_path.as_deref(), None)?;
     println!("  browser backend: {backend}");
     match backend {
         BrowserBackend::Chrome => {
