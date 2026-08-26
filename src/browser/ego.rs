@@ -204,9 +204,7 @@ fn normalize_marker(marker: &str) -> String {
     let mut chars = marker.chars().peekable();
 
     while let Some(ch) = chars.next() {
-        if ch == '\\'
-            && matches!(chars.peek(), Some('_' | '*' | '`'))
-        {
+        if ch == '\\' && matches!(chars.peek(), Some('_' | '*' | '`')) {
             if let Some(escaped) = chars.next() {
                 normalized.push(escaped);
             }
@@ -259,7 +257,9 @@ pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_marked_payload, is_user_control_diagnostic, normalize_marker, runtime_diagnostic};
+    use super::{
+        extract_marked_payload, is_user_control_diagnostic, normalize_marker, runtime_diagnostic,
+    };
 
     #[test]
     fn parses_original_marker() {
@@ -288,14 +288,19 @@ mod tests {
     #[test]
     fn parses_fully_markdown_escaped_marker_seen_in_ego_browser() {
         assert_eq!(
-            extract_marked_payload(r#"\_\_WTAGENT\_JSON\_\_{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}"#),
+            extract_marked_payload(
+                r#"\_\_WTAGENT\_JSON\_\_{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}"#,
+            ),
             Some(r#"{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}"#)
         );
     }
 
     #[test]
     fn normalizes_only_markdown_marker_escapes() {
-        assert_eq!(normalize_marker(r"\_\_WTAGENT\_JSON\_\_"), "__WTAGENT_JSON__");
+        assert_eq!(
+            normalize_marker(r"\_\_WTAGENT\_JSON\_\_"),
+            "__WTAGENT_JSON__"
+        );
     }
 
     #[test]
