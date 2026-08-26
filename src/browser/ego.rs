@@ -6,10 +6,7 @@ use std::{
 };
 
 use serde_json::Value;
-use tokio::{
-    io::AsyncWriteExt,
-    process::Command,
-};
+use tokio::{io::AsyncWriteExt, process::Command};
 
 use crate::{
     browser::provider::ProviderConfig,
@@ -80,14 +77,13 @@ impl EgoClient {
     }
 
     async fn run_json(&self, code: &str) -> Result<Value> {
-        self.run_json_with_timeout(code, DEFAULT_COMMAND_TIMEOUT).await
+        self.run_json_with_timeout(code, DEFAULT_COMMAND_TIMEOUT)
+            .await
     }
 
     async fn run_json_with_timeout(&self, code: &str, timeout: Duration) -> Result<Value> {
         let task_space = serde_json::to_string(&self.task_space)?;
-        let script = format!(
-            "const __task = await useOrCreateTaskSpace({task_space});\n{code}\n"
-        );
+        let script = format!("const __task = await useOrCreateTaskSpace({task_space});\n{code}\n");
 
         let mut child = Command::new(&self.executable)
             .arg("nodejs")
