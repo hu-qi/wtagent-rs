@@ -14,6 +14,7 @@ use crate::{
 };
 
 const OUTPUT_MARKER: &str = "__WTAGENT_JSON__";
+const OUTPUT_MARKER_CORE: &str = "WTAGENT_JSON";
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(75);
 
 pub struct EgoClient {
@@ -132,22 +133,38 @@ impl EgoClient {
             return Err(WtError::Browser(format!("ego-browser failed: {detail}")));
         }
 
-        let payload = stdout
-            .lines()
-            .rev()
-            .find_map(|line| line.trim().strip_prefix(OUTPUT_MARKER))
-            .ok_or_else(|| {
-                WtError::Browser(format!(
-                    "ego-browser produced no WTAgent result{}",
-                    if stderr.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {}", stderr.trim())
-                    }
-                ))
-            })?;
+        let payload = extract_marked_payload(&stdout).ok_or_else(|| {
+            WtError::Browser(format!(
+                "ego-browser produced no WTAgent result{}",
+                if stderr.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", stderr.trim())
+                }
+            ))
+        })?;
         serde_json::from_str(payload).map_err(WtError::Json)
     }
+}
+
+fn extract_marked_payload(stdout: &str) -> Option<&str> {
+    stdout.lines().rev().find_map(|line| {
+        let line = line.trim();
+        let marker_at = line.find(OUTPUT_MARKER_CORE)?;
+        let prefix = &line[..marker_at];
+        if !prefix
+            .chars()
+            .all(|ch| ch.is_whitespace() || matches!(ch, '_' | '*' | '`'))
+        {
+            return None;
+        }
+
+        let payload =
+            line[marker_at + OUTPUT_MARKER_CORE.len()..].trim_start_matches(|ch: char| {
+                ch.is_whitespace() || matches!(ch, '_' | '*' | '`' | ':')
+            });
+        (!payload.is_empty()).then_some(payload)
+    })
 }
 
 pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
@@ -187,4 +204,33 @@ pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
         "ego-browser was not found. Install ego lite and finish onboarding, add ~/.local/bin to PATH, or pass --ego-path."
             .into(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_marked_payload;
+
+    #[test]
+    fn parses_original_marker() {
+        assert_eq!(
+            extract_marked_payload("__WTAGENT_JSON__{\"ok\":true}"),
+            Some("{\"ok\":true}")
+        );
+    }
+
+    #[test]
+    fn parses_markdown_decorated_marker_from_ego_browser() {
+        assert_eq!(
+            extract_marked_payload("**WTAGENT_JSON**{\"ok\":true,\"targetId\":\"abc\"}"),
+            Some("{\"ok\":true,\"targetId\":\"abc\"}")
+        );
+    }
+
+    #[test]
+    fn ignores_marker_mentions_in_prose() {
+        assert_eq!(
+            extract_marked_payload("warning: expected WTAGENT_JSON marker"),
+            None
+        );
+    }
 }
