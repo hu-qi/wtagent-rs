@@ -7,7 +7,7 @@ use wtagent_rs::{
         adapter::{BrowserWebAdapter, WebAdapter},
         backend::{resolve_browser_backend, BrowserBackend},
         chrome::discover_chrome,
-        ego::discover_ego,
+        ego::{discover_ego, EgoClient},
         provider::{ProviderConfig, ProviderId},
         throttle::RateController,
     },
@@ -85,6 +85,11 @@ enum Commands {
     },
     /// Open the selected provider browser and wait for manual login when required.
     Login,
+    /// Manage ego-lite Task Space ownership.
+    Ego {
+        #[command(subcommand)]
+        command: EgoCommands,
+    },
     /// Check browser backend, project paths, provider metadata, and data directories.
     Doctor,
     /// List supported providers and their web endpoints.
@@ -94,6 +99,12 @@ enum Commands {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum EgoCommands {
+    /// Explicitly return the provider Task Space from user control to WTAgent-RS.
+    Claim,
 }
 
 #[tokio::main]
@@ -140,6 +151,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Some(Commands::Doctor) => doctor(&cli).await,
         Some(Commands::Login) => login(&cli).await,
+        Some(Commands::Ego { command }) => ego_command(&cli, command).await,
         Some(Commands::Run { task, files }) => run_new(&cli, task.join(" "), files.clone()).await,
         Some(Commands::Resume {
             session_id,
@@ -243,6 +255,26 @@ async fn login(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+async fn ego_command(cli: &Cli, command: &EgoCommands) -> Result<()> {
+    let provider = cli.model.unwrap_or_default();
+    match command {
+        EgoCommands::Claim => {
+            if cli.chrome_path.is_some() {
+                return Err(WtError::Config(
+                    "`wtagent ego claim` is only valid for the ego-lite backend; remove --chrome-path"
+                        .into(),
+                ));
+            }
+            let task_space = ego_task_space(provider);
+            EgoClient::claim_task_space(None, task_space.clone()).await?;
+            println!(
+                "ego-lite task space `{task_space}` is now controlled by WTAgent-RS. Retry or resume your task."
+            );
+            Ok(())
+        }
+    }
+}
+
 async fn doctor(cli: &Cli) -> Result<()> {
     let provider = cli.model.unwrap_or_default();
     let config = configured(cli, provider, cli.project.clone())?;
@@ -267,10 +299,7 @@ async fn doctor(cli: &Cli) -> Result<()> {
         BrowserBackend::Ego => {
             let ego = discover_ego(None)?;
             println!("  ego-browser: {}", ego.display());
-            println!(
-                "  ego task space: wtagent-rs-{}",
-                format!("{:?}", provider).to_ascii_lowercase()
-            );
+            println!("  ego task space: {}", ego_task_space(provider));
         }
         BrowserBackend::Auto => unreachable!("doctor resolves auto before reporting"),
     }
@@ -281,6 +310,13 @@ async fn doctor(cli: &Cli) -> Result<()> {
     println!("  anti-bot policy: manual challenge only; no CAPTCHA bypass/fingerprint spoofing/account rotation");
     println!("status: OK");
     Ok(())
+}
+
+fn ego_task_space(provider: ProviderId) -> String {
+    format!(
+        "wtagent-rs-{}",
+        format!("{provider:?}").to_ascii_lowercase()
+    )
 }
 
 fn print_providers() {
