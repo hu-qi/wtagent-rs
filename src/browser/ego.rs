@@ -15,6 +15,7 @@ use crate::{
 
 const OUTPUT_MARKER: &str = "__WTAGENT_JSON__";
 const OUTPUT_MARKER_CORE: &str = "WTAGENT_JSON";
+const OUTPUT_MARKER_CORE_ESCAPED: &str = r"WTAGENT\_JSON";
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(75);
 const MAX_DIAGNOSTIC_LINES: usize = 8;
 
@@ -185,7 +186,7 @@ fn runtime_diagnostic(stdout: &str, stderr: &str) -> String {
 fn extract_marked_payload(stdout: &str) -> Option<&str> {
     stdout.lines().rev().find_map(|line| {
         let line = line.trim();
-        let marker_at = line.find(OUTPUT_MARKER_CORE)?;
+        let (marker_at, marker_len) = find_marker_core(line)?;
         let prefix = &line[..marker_at];
         if !prefix
             .chars()
@@ -194,12 +195,27 @@ fn extract_marked_payload(stdout: &str) -> Option<&str> {
             return None;
         }
 
-        let payload =
-            line[marker_at + OUTPUT_MARKER_CORE.len()..].trim_start_matches(|ch: char| {
-                ch.is_whitespace() || matches!(ch, '_' | '*' | '`' | ':')
-            });
+        let payload = line[marker_at + marker_len..].trim_start_matches(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '_' | '*' | '`' | ':')
+        });
         (!payload.is_empty()).then_some(payload)
     })
+}
+
+fn find_marker_core(line: &str) -> Option<(usize, usize)> {
+    let plain = line
+        .find(OUTPUT_MARKER_CORE)
+        .map(|index| (index, OUTPUT_MARKER_CORE.len()));
+    let escaped = line
+        .find(OUTPUT_MARKER_CORE_ESCAPED)
+        .map(|index| (index, OUTPUT_MARKER_CORE_ESCAPED.len()));
+
+    match (plain, escaped) {
+        (Some(plain), Some(escaped)) => Some(if plain.0 <= escaped.0 { plain } else { escaped }),
+        (Some(plain), None) => Some(plain),
+        (None, Some(escaped)) => Some(escaped),
+        (None, None) => None,
+    }
 }
 
 pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
@@ -258,6 +274,14 @@ mod tests {
         assert_eq!(
             extract_marked_payload("**WTAGENT_JSON**{\"ok\":true,\"targetId\":\"abc\"}"),
             Some("{\"ok\":true,\"targetId\":\"abc\"}")
+        );
+    }
+
+    #[test]
+    fn parses_markdown_escaped_marker_from_ego_browser() {
+        assert_eq!(
+            extract_marked_payload(r#"**WTAGENT\_JSON**{"done":true,"ownership":"agent"}"#),
+            Some(r#"{"done":true,"ownership":"agent"}"#)
         );
     }
 
