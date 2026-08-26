@@ -14,7 +14,9 @@ use wtagent_rs::{
     config::{default_app_data_dir, AppConfig, ApprovalMode},
     policy::PolicyEngine,
     runtime::{AgentRuntime, TerminalApproval},
-    session::{delete_session, latest_session_for_project, list_sessions, SessionState, SessionStore},
+    session::{
+        delete_session, latest_session_for_project, list_sessions, SessionState, SessionStore,
+    },
     tools::ToolExecutor,
     Result, WtError,
 };
@@ -220,11 +222,8 @@ async fn session_command(cli: &Cli, command: Option<&SessionCommands>) -> Result
             instruction,
         }) => resume(cli, session_id, instruction.join(" ")).await,
         Some(SessionCommands::Continue { instruction }) => {
-            let project_config = configured(
-                cli,
-                cli.model.unwrap_or_default(),
-                cli.project.clone(),
-            )?;
+            let project_config =
+                configured(cli, cli.model.unwrap_or_default(), cli.project.clone())?;
             let Some(state) = latest_session_for_project(
                 &project_config.app_data_dir,
                 &project_config.project_root,
@@ -258,7 +257,9 @@ async fn print_session_list(limit: usize, format: SessionOutputFormat) -> Result
                 println!("No saved sessions.");
                 return Ok(());
             }
-            println!("SESSION                           PROVIDER  TURN  PHASE         PROJECT / TASK");
+            println!(
+                "SESSION                           PROVIDER  TURN  PHASE         PROJECT / TASK"
+            );
             for state in sessions {
                 println!(
                     "{:<32}  {:<8}  {:>4}  {:<12}  {} / {}",
@@ -287,7 +288,10 @@ fn print_session(state: &SessionState, format: SessionOutputFormat) -> Result<()
             println!("project: {}", state.project_root.display());
             println!("phase: {}", state.phase);
             println!("turn: {}", state.turn);
-            println!("mode: {}", state.active_mode.as_deref().unwrap_or("site-current"));
+            println!(
+                "mode: {}",
+                state.active_mode.as_deref().unwrap_or("site-current")
+            );
             println!(
                 "conversation: {}",
                 state.conversation_url.as_deref().unwrap_or("-")
@@ -539,13 +543,7 @@ mod cli_tests {
     #[test]
     fn parses_session_list_json() {
         let cli = Cli::try_parse_from([
-            "wtagent",
-            "session",
-            "list",
-            "--limit",
-            "5",
-            "--format",
-            "json",
+            "wtagent", "session", "list", "--limit", "5", "--format", "json",
         ])
         .unwrap();
         assert!(matches!(
