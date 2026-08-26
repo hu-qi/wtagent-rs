@@ -36,8 +36,28 @@ pub struct ChromePage {
 }
 
 impl ChromePage {
-    #[allow(clippy::too_many_arguments)]
     pub async fn launch(
+        provider: &ProviderConfig,
+        profile_dir: &Path,
+        chrome_override: Option<&Path>,
+        minimized: bool,
+        preferred_url: Option<&str>,
+    ) -> Result<Self> {
+        Self::launch_with_backend(
+            provider,
+            profile_dir,
+            BrowserBackend::Auto,
+            chrome_override,
+            None,
+            None,
+            minimized,
+            preferred_url,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn launch_with_backend(
         provider: &ProviderConfig,
         profile_dir: &Path,
         browser_backend: BrowserBackend,
@@ -260,7 +280,7 @@ pub fn discover_chrome(override_path: Option<&Path>) -> Result<PathBuf> {
         .find(|path| path.is_file())
         .ok_or_else(|| {
             WtError::Config(
-                "Chrome/Chromium was not found. Install Chrome, install ego-lite and use --browser ego, or pass --chrome-path."
+                "Chrome/Chromium was not found. Install Chrome, install ego-lite, or pass --chrome-path."
                     .into(),
             )
         })
