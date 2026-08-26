@@ -107,7 +107,6 @@ impl AppConfig {
     }
 }
 
-
 pub fn default_app_data_dir() -> Result<PathBuf> {
     Ok(dirs::data_dir()
         .or_else(dirs::home_dir)

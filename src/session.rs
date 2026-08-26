@@ -104,9 +104,9 @@ impl SessionStore {
         let directory = app_data_dir.join("sessions").join(session_id);
         let state_path = directory.join("state.json");
         let events_path = directory.join("events.jsonl");
-        let content = tokio::fs::read_to_string(&state_path).await.map_err(|e| {
-            WtError::Session(format!("cannot load session {session_id}: {e}"))
-        })?;
+        let content = tokio::fs::read_to_string(&state_path)
+            .await
+            .map_err(|e| WtError::Session(format!("cannot load session {session_id}: {e}")))?;
         let state: SessionState = serde_json::from_str(&content)?;
         Ok(Self {
             directory,
@@ -157,7 +157,8 @@ impl SessionStore {
         self.state.phase = "idle".into();
         self.state.last_message = Some(message.clone());
         self.touch_and_save().await?;
-        self.append_event("run.completed", json!({"message": message})).await
+        self.append_event("run.completed", json!({"message": message}))
+            .await
     }
 
     pub fn effect(&self, key: &str) -> Option<&EffectRecord> {
@@ -210,7 +211,8 @@ impl SessionStore {
             .append(true)
             .open(&self.events_path)
             .await?;
-        file.write_all(serde_json::to_string(&event)?.as_bytes()).await?;
+        file.write_all(serde_json::to_string(&event)?.as_bytes())
+            .await?;
         file.write_all(b"\n").await?;
         file.flush().await?;
         Ok(())
@@ -279,14 +281,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
         tokio::fs::create_dir_all(&project).await.unwrap();
-        let mut store = SessionStore::create(
-            temp.path(),
-            ProviderId::Chatgpt,
-            &project,
-            "test".into(),
-        )
-        .await
-        .unwrap();
+        let mut store =
+            SessionStore::create(temp.path(), ProviderId::Chatgpt, &project, "test".into())
+                .await
+                .unwrap();
         store.update_phase("running").await.unwrap();
         let id = store.state.session_id.clone();
         let loaded = SessionStore::load(temp.path(), &id).await.unwrap();

@@ -138,9 +138,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Some(Commands::Doctor) => doctor(&cli).await,
         Some(Commands::Login) => login(&cli).await,
-        Some(Commands::Run { task, files }) => {
-            run_new(&cli, task.join(" "), files.clone()).await
-        }
+        Some(Commands::Run { task, files }) => run_new(&cli, task.join(" "), files.clone()).await,
         Some(Commands::Resume {
             session_id,
             instruction,
@@ -157,13 +155,8 @@ async fn run_new(cli: &Cli, task: String, files: Vec<PathBuf>) -> Result<()> {
     let provider = cli.model.unwrap_or_default();
     let config = configured(cli, provider, cli.project.clone())?;
     validate_files(&files)?;
-    let session = SessionStore::create(
-        &config.app_data_dir,
-        provider,
-        &config.project_root,
-        task,
-    )
-    .await?;
+    let session =
+        SessionStore::create(&config.app_data_dir, provider, &config.project_root, task).await?;
     let session_id = session.state.session_id.clone();
     eprintln!("session: {session_id}");
     let runtime = runtime_from(config, session);
@@ -238,8 +231,12 @@ async fn login(cli: &Cli) -> Result<()> {
         println!("{} is already signed in.", provider.label());
         return Ok(());
     }
-    eprintln!("Sign in manually in Chrome. This command does not automate credentials or challenges.");
-    adapter.wait_for_manual_login(Duration::from_secs(10 * 60)).await?;
+    eprintln!(
+        "Sign in manually in Chrome. This command does not automate credentials or challenges."
+    );
+    adapter
+        .wait_for_manual_login(Duration::from_secs(10 * 60))
+        .await?;
     println!("{} login detected.", provider.label());
     Ok(())
 }
@@ -249,13 +246,20 @@ async fn doctor(cli: &Cli) -> Result<()> {
     let config = configured(cli, provider, cli.project.clone())?;
     println!("WTAgent-RS doctor");
     println!("  project: {}", config.project_root.display());
-    println!("  provider: {} ({})", provider.label(), provider.config().base_url);
+    println!(
+        "  provider: {} ({})",
+        provider.label(),
+        provider.config().base_url
+    );
     println!("  data dir: {}", config.app_data_dir.display());
     println!("  profile: {}", config.profile_dir().display());
     tokio::fs::create_dir_all(&config.app_data_dir).await?;
     let chrome = discover_chrome(config.chrome_path.as_deref())?;
     println!("  chrome: {}", chrome.display());
-    println!("  rate policy: min={}ms, max={}/minute", cli.min_send_interval_ms, cli.max_sends_per_minute);
+    println!(
+        "  rate policy: min={}ms, max={}/minute",
+        cli.min_send_interval_ms, cli.max_sends_per_minute
+    );
     println!("  anti-bot policy: manual challenge only; no CAPTCHA bypass/fingerprint spoofing/account rotation");
     println!("status: OK");
     Ok(())
@@ -286,9 +290,16 @@ fn validate_files(files: &[PathBuf]) -> Result<()> {
 }
 
 fn init_tracing(debug: bool) {
-    let default = if debug { "wtagent_rs=debug" } else { "wtagent_rs=warn" };
+    let default = if debug {
+        "wtagent_rs=debug"
+    } else {
+        "wtagent_rs=warn"
+    };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
-    tracing_subscriber::fmt().with_env_filter(filter).with_target(false).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .init();
 }
 
 fn parse_cli_with_bare_task() -> Cli {

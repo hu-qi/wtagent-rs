@@ -98,7 +98,11 @@ fn parse_args(tool_call: roxmltree::Node<'_, '_>) -> Result<Value> {
 
     let mut object = Map::new();
     for child in element_children {
-        insert_xml_value(&mut object, child.tag_name().name(), xml_node_to_json(child));
+        insert_xml_value(
+            &mut object,
+            child.tag_name().name(),
+            xml_node_to_json(child),
+        );
     }
     Ok(Value::Object(object))
 }
@@ -116,7 +120,11 @@ fn xml_node_to_json(node: roxmltree::Node<'_, '_>) -> Value {
 
     let mut object = Map::new();
     for child in children {
-        insert_xml_value(&mut object, child.tag_name().name(), xml_node_to_json(child));
+        insert_xml_value(
+            &mut object,
+            child.tag_name().name(),
+            xml_node_to_json(child),
+        );
     }
     Value::Object(object)
 }

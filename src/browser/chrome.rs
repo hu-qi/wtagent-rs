@@ -39,46 +39,37 @@ impl ChromePage {
     ) -> Result<Self> {
         tokio::fs::create_dir_all(profile_dir).await?;
         let active_port_file = profile_dir.join("DevToolsActivePort");
-        let client = Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
 
-        let (port, child) = if let Some(port) =
-            probe_existing_port(&client, &active_port_file).await
-        {
-            debug!(port, "reusing provider Chrome CDP endpoint");
-            (port, None)
-        } else {
-            let chrome = discover_chrome(chrome_override)?;
-            info!(chrome = %chrome.display(), provider = provider.label, "launching Chrome");
-            let mut command = Command::new(chrome);
-            command
-                .arg("--remote-debugging-port=0")
-                .arg(format!("--user-data-dir={}", profile_dir.display()))
-                .arg("--no-first-run")
-                .arg("--no-default-browser-check")
-                .arg(provider.base_url)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .kill_on_drop(false);
-            if minimized {
-                command.arg("--start-minimized");
-            }
-            let child = command.spawn().map_err(|e| {
-                WtError::Browser(format!("failed to launch Chrome/Chromium: {e}"))
-            })?;
-            let port = wait_for_devtools_port(&client, &active_port_file).await?;
-            (port, Some(child))
-        };
+        let (port, child) =
+            if let Some(port) = probe_existing_port(&client, &active_port_file).await {
+                debug!(port, "reusing provider Chrome CDP endpoint");
+                (port, None)
+            } else {
+                let chrome = discover_chrome(chrome_override)?;
+                info!(chrome = %chrome.display(), provider = provider.label, "launching Chrome");
+                let mut command = Command::new(chrome);
+                command
+                    .arg("--remote-debugging-port=0")
+                    .arg(format!("--user-data-dir={}", profile_dir.display()))
+                    .arg("--no-first-run")
+                    .arg("--no-default-browser-check")
+                    .arg(provider.base_url)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .kill_on_drop(false);
+                if minimized {
+                    command.arg("--start-minimized");
+                }
+                let child = command.spawn().map_err(|e| {
+                    WtError::Browser(format!("failed to launch Chrome/Chromium: {e}"))
+                })?;
+                let port = wait_for_devtools_port(&client, &active_port_file).await?;
+                (port, Some(child))
+            };
 
-        let target = choose_or_create_target(
-            &client,
-            port,
-            provider,
-            preferred_url,
-        )
-        .await?;
+        let target = choose_or_create_target(&client, port, provider, preferred_url).await?;
         let ws = target.websocket_debugger_url.ok_or_else(|| {
             WtError::Browser("selected Chrome target has no debugger websocket".into())
         })?;
@@ -150,9 +141,7 @@ async fn choose_or_create_target(
     let encoded: String =
         url::form_urlencoded::byte_serialize(provider.base_url.as_bytes()).collect();
     let target = client
-        .put(format!(
-            "http://127.0.0.1:{port}/json/new?{encoded}"
-        ))
+        .put(format!("http://127.0.0.1:{port}/json/new?{encoded}"))
         .send()
         .await?
         .error_for_status()?

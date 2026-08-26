@@ -16,8 +16,8 @@ use crate::{
     config::Limits,
     error::{Result, WtError},
     protocol::{
-        build_bootstrap_prompt, build_follow_up, build_protocol_correction,
-        parse_agent_response, serialize_tool_results, ToolCall,
+        build_bootstrap_prompt, build_follow_up, build_protocol_correction, parse_agent_response,
+        serialize_tool_results, ToolCall,
     },
     session::{EffectStatus, SessionStore},
     tools::{ToolExecutor, ToolResult, ToolRisk},
@@ -41,7 +41,10 @@ impl ApprovalHandler for TerminalApproval {
             io::stderr().flush().map_err(WtError::Io)?;
             let mut input = String::new();
             io::stdin().read_line(&mut input).map_err(WtError::Io)?;
-            Ok(matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+            Ok(matches!(
+                input.trim().to_ascii_lowercase().as_str(),
+                "y" | "yes"
+            ))
         })
         .await
         .map_err(|e| WtError::Policy(format!("approval prompt failed: {e}")))?
@@ -253,14 +256,21 @@ impl AgentRuntime {
                 if protocol_errors >= 2 {
                     return Err(WtError::Protocol(message));
                 }
-                self.send_web(&build_protocol_correction(&message), &[]).await?;
+                self.send_web(&build_protocol_correction(&message), &[])
+                    .await?;
                 continue;
             }
 
             let mut results = Vec::with_capacity(parsed.tool_calls.len());
             for (index, call) in parsed.tool_calls.iter().enumerate() {
                 let result = self
-                    .execute_tool(call, index, turn_number, &turn.text, turn.assistant_id.as_deref())
+                    .execute_tool(
+                        call,
+                        index,
+                        turn_number,
+                        &turn.text,
+                        turn.assistant_id.as_deref(),
+                    )
                     .await?;
                 results.push(result.to_value());
             }
@@ -336,18 +346,16 @@ impl AgentRuntime {
         if risk == ToolRisk::Read {
             let result = self.tools.execute(call).await;
             self.session
-                .append_event("tool.completed", json!({"name": call.name, "ok": result.ok}))
+                .append_event(
+                    "tool.completed",
+                    json!({"name": call.name, "ok": result.ok}),
+                )
                 .await?;
             return Ok(result);
         }
 
-        let (effect_key, fingerprint) = effect_identity(
-            call,
-            index,
-            turn_number,
-            raw_turn,
-            assistant_id,
-        );
+        let (effect_key, fingerprint) =
+            effect_identity(call, index, turn_number, raw_turn, assistant_id);
         if let Some(existing) = self.session.effect(&effect_key) {
             return match (&existing.status, &existing.result) {
                 (EffectStatus::Completed, Some(result)) => Ok(result.clone()),
@@ -366,7 +374,10 @@ impl AgentRuntime {
             .mark_effect_completed(&effect_key, result.clone())
             .await?;
         self.session
-            .append_event("tool.completed", json!({"name": call.name, "ok": result.ok}))
+            .append_event(
+                "tool.completed",
+                json!({"name": call.name, "ok": result.ok}),
+            )
             .await?;
         Ok(result)
     }
@@ -429,14 +440,24 @@ fn canonical_json(value: &Value) -> String {
             keys.sort();
             let body = keys
                 .into_iter()
-                .map(|key| format!("{}:{}", serde_json::to_string(key).unwrap(), canonical_json(&map[key])))
+                .map(|key| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(key).unwrap(),
+                        canonical_json(&map[key])
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(",");
             format!("{{{body}}}")
         }
         Value::Array(items) => format!(
             "[{}]",
-            items.iter().map(canonical_json).collect::<Vec<_>>().join(",")
+            items
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",")
         ),
         _ => serde_json::to_string(value).unwrap_or_else(|_| "null".into()),
     }
@@ -459,7 +480,10 @@ fn compact_results(results: Vec<Value>, budget: usize) -> Vec<Value> {
         .map(|value| {
             let name = value.get("name").cloned().unwrap_or(Value::Null);
             let ok = value.get("ok").cloned().unwrap_or(Value::Bool(false));
-            let message = value.get("message").and_then(Value::as_str).unwrap_or_default();
+            let message = value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let preview = value
                 .get("data")
                 .map(|data| serde_json::to_string(data).unwrap_or_default())
@@ -504,15 +528,23 @@ mod tests {
 
     #[test]
     fn compacts_large_results() {
-        let results = vec![json!({"name":"fs.read","ok":true,"message":"ok","data":{"content":"x".repeat(20_000)}})];
+        let results = vec![
+            json!({"name":"fs.read","ok":true,"message":"ok","data":{"content":"x".repeat(20_000)}}),
+        ];
         let compacted = compact_results(results, 2_000);
         assert_eq!(compacted[0]["compacted"], true);
     }
 
     #[test]
     fn effect_identity_is_stable_for_object_key_order() {
-        let a = ToolCall { name: "fs.write".into(), args: json!({"b":2,"a":1}) };
-        let b = ToolCall { name: "fs.write".into(), args: json!({"a":1,"b":2}) };
+        let a = ToolCall {
+            name: "fs.write".into(),
+            args: json!({"b":2,"a":1}),
+        };
+        let b = ToolCall {
+            name: "fs.write".into(),
+            args: json!({"a":1,"b":2}),
+        };
         assert_eq!(
             effect_identity(&a, 0, 1, "raw", Some("m1")),
             effect_identity(&b, 0, 1, "raw", Some("m1"))

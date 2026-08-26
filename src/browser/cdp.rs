@@ -28,9 +28,8 @@ impl CdpClient {
         let (stream, _) = connect_async(ws_url).await?;
         let (mut sink, mut source) = stream.split();
         let (tx, mut rx) = mpsc::channel::<Message>(128);
-        let pending: Arc<
-            Mutex<HashMap<u64, oneshot::Sender<std::result::Result<Value, String>>>>,
-        > = Arc::new(Mutex::new(HashMap::new()));
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<std::result::Result<Value, String>>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         tokio::spawn(async move {
             while let Some(message) = rx.recv().await {
@@ -100,9 +99,7 @@ impl CdpClient {
 
         match tokio::time::timeout(Duration::from_secs(30), rx).await {
             Ok(Ok(Ok(value))) => Ok(value),
-            Ok(Ok(Err(error))) => Err(WtError::Browser(format!(
-                "CDP {method} failed: {error}"
-            ))),
+            Ok(Ok(Err(error))) => Err(WtError::Browser(format!("CDP {method} failed: {error}"))),
             Ok(Err(_)) => Err(WtError::Browser(format!(
                 "CDP {method} response channel closed"
             ))),
@@ -203,9 +200,7 @@ impl CdpClient {
     pub async fn count(&self, selector: &str) -> Result<usize> {
         let selector = serde_json::to_string(selector)?;
         let value = self
-            .evaluate(format!(
-                "document.querySelectorAll({selector}).length"
-            ))
+            .evaluate(format!("document.querySelectorAll({selector}).length"))
             .await?;
         Ok(value.as_u64().unwrap_or(0) as usize)
     }
@@ -278,7 +273,8 @@ impl CdpClient {
     }
 
     pub async fn insert_text(&self, text: &str) -> Result<()> {
-        self.call("Input.insertText", json!({ "text": text })).await?;
+        self.call("Input.insertText", json!({ "text": text }))
+            .await?;
         Ok(())
     }
 
@@ -333,7 +329,11 @@ impl CdpClient {
         Ok(())
     }
 
-    pub async fn set_file_input(&self, selector: &str, files: &[std::path::PathBuf]) -> Result<bool> {
+    pub async fn set_file_input(
+        &self,
+        selector: &str,
+        files: &[std::path::PathBuf],
+    ) -> Result<bool> {
         if files.is_empty() {
             return Ok(true);
         }
@@ -348,10 +348,7 @@ impl CdpClient {
                 json!({ "nodeId": node_id, "selector": selector }),
             )
             .await?;
-        let input_node = queried
-            .get("nodeId")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+        let input_node = queried.get("nodeId").and_then(Value::as_u64).unwrap_or(0);
         if input_node == 0 {
             return Ok(false);
         }

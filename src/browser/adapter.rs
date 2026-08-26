@@ -1,7 +1,4 @@
-use std::{
-    path::PathBuf,
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -132,7 +129,10 @@ impl BrowserWebAdapter {
             "einen moment",
             "sicherheitsprüfung",
         ];
-        if challenge_markers.iter().any(|marker| lower.contains(marker)) {
+        if challenge_markers
+            .iter()
+            .any(|marker| lower.contains(marker))
+        {
             return Err(WtError::Challenge(format!(
                 "{} displayed an anti-bot/security challenge; complete it manually in Chrome",
                 self.provider.label
@@ -197,12 +197,10 @@ impl BrowserWebAdapter {
                 Ok(value.as_str().map(ToOwned::to_owned))
             }
             ProviderId::Kimi => cdp.last_attribute(selector, "data-archer-id").await,
-            ProviderId::Glm => {
-                Ok(cdp
-                    .last_attribute(selector, "id")
-                    .await?
-                    .map(|id| id.trim_start_matches("message-").to_string()))
-            }
+            ProviderId::Glm => Ok(cdp
+                .last_attribute(selector, "id")
+                .await?
+                .map(|id| id.trim_start_matches("message-").to_string())),
         }
     }
 
@@ -309,14 +307,26 @@ impl BrowserWebAdapter {
     }
 
     async fn click_new_chat_if_needed(&self) -> Result<()> {
-        if self.page()?.cdp.count(self.provider.message_selector).await? == 0 {
+        if self
+            .page()?
+            .cdp
+            .count(self.provider.message_selector)
+            .await?
+            == 0
+        {
             return Ok(());
         }
         let selectors = new_chat_selectors(self.provider.id);
         if self.page()?.cdp.click_first_visible(selectors).await? {
             tokio::time::sleep(Duration::from_millis(800)).await;
         }
-        if self.page()?.cdp.count(self.provider.message_selector).await? > 0 {
+        if self
+            .page()?
+            .cdp
+            .count(self.provider.message_selector)
+            .await?
+            > 0
+        {
             return Err(WtError::Browser(format!(
                 "{} did not open a verified empty conversation; refusing to send a new task into existing history",
                 self.provider.label
@@ -453,7 +463,10 @@ impl BrowserWebAdapter {
                         })()"#,
                     )
                     .await?;
-                Ok(result.as_bool().unwrap_or(false).then(|| "expert-thinking".into()))
+                Ok(result
+                    .as_bool()
+                    .unwrap_or(false)
+                    .then(|| "expert-thinking".into()))
             }
             (ProviderId::Kimi, "k3") => {
                 cdp.evaluate(
@@ -576,10 +589,12 @@ impl WebAdapter for BrowserWebAdapter {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut consecutive = 0usize;
         while tokio::time::Instant::now() < deadline {
-            self.throw_if_challenge().await.or_else(|error| match error {
-                WtError::Challenge(_) => Ok(()),
-                other => Err(other),
-            })?;
+            self.throw_if_challenge()
+                .await
+                .or_else(|error| match error {
+                    WtError::Challenge(_) => Ok(()),
+                    other => Err(other),
+                })?;
             if self.auth_state().await? == AuthState::Authenticated {
                 consecutive += 1;
                 if consecutive >= 3 {
@@ -718,9 +733,10 @@ impl WebAdapter for BrowserWebAdapter {
         timeout: Duration,
         stable_window: Duration,
     ) -> Result<CompletedTurn> {
-        let baseline = self.baseline.clone().ok_or_else(|| {
-            WtError::Browser("wait_for_turn called before send_message".into())
-        })?;
+        let baseline = self
+            .baseline
+            .clone()
+            .ok_or_else(|| WtError::Browser("wait_for_turn called before send_message".into()))?;
         let deadline = tokio::time::Instant::now() + timeout;
         let mut last_text = String::new();
         let mut stable_since = tokio::time::Instant::now();
@@ -749,8 +765,8 @@ impl WebAdapter for BrowserWebAdapter {
                 let generating = self.assistant_generating(true).await?;
                 let stable_for = tokio::time::Instant::now().duration_since(stable_since);
                 let looks_protocol = current.text.contains("<agent_response");
-                let complete_protocol = !looks_protocol
-                    || current.text.contains("</agent_response>");
+                let complete_protocol =
+                    !looks_protocol || current.text.contains("</agent_response>");
                 let grace = if self.provider.reliable_completion_signal {
                     Duration::from_secs(10)
                 } else {
@@ -794,10 +810,7 @@ impl WebAdapter for BrowserWebAdapter {
 
 fn new_chat_selectors(provider: ProviderId) -> &'static [&'static str] {
     match provider {
-        ProviderId::Chatgpt => &[
-            "[data-testid=\"create-new-chat-button\"]",
-            "a[href=\"/\"]",
-        ],
+        ProviderId::Chatgpt => &["[data-testid=\"create-new-chat-button\"]", "a[href=\"/\"]"],
         ProviderId::Claude => &["a[href=\"/new\"]"],
         ProviderId::Deepseek => &["[data-testid=\"new-chat\"]", "a[href=\"/\"]"],
         ProviderId::Gemini => &["a[href=\"/app\"]"],

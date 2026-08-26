@@ -80,7 +80,9 @@ impl RateController {
                 }
             }
             ProviderOutcome::GenerationFailure => {
-                let delay = self.backoff_for(state.penalty_level).min(Duration::from_secs(60));
+                let delay = self
+                    .backoff_for(state.penalty_level)
+                    .min(Duration::from_secs(60));
                 state.penalty_level = state.penalty_level.saturating_add(1);
                 state.blocked_until = Some(now + delay);
             }

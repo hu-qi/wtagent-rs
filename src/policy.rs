@@ -85,7 +85,10 @@ impl PolicyEngine {
                 "absolute paths are outside the project policy: {raw}"
             )));
         }
-        if path.components().any(|component| matches!(component, Component::ParentDir)) {
+        if path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
             return Err(WtError::Policy(format!(
                 "parent traversal is not allowed: {raw}"
             )));

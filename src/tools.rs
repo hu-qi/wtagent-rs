@@ -49,9 +49,9 @@ impl ToolResult {
     }
 
     pub fn to_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| {
-            json!({"name": self.name, "ok": false, "message": "result serialization failed"})
-        })
+        serde_json::to_value(self).unwrap_or_else(
+            |_| json!({"name": self.name, "ok": false, "message": "result serialization failed"}),
+        )
     }
 }
 
@@ -136,7 +136,14 @@ impl ToolExecutor {
         let max_entries = 2_000usize;
         let entries = tokio::task::spawn_blocking(move || {
             let mut output = Vec::<Value>::new();
-            walk_tree(&root, &target, depth, include_hidden, max_entries, &mut output)?;
+            walk_tree(
+                &root,
+                &target,
+                depth,
+                include_hidden,
+                max_entries,
+                &mut output,
+            )?;
             Ok::<_, std::io::Error>(output)
         })
         .await
@@ -183,7 +190,10 @@ impl ToolExecutor {
         let max_results = usize_arg(args, "max_results").unwrap_or(200).min(1_000);
         let target = self.policy.resolve_read_path(&raw_path)?;
         let pattern = if regex {
-            Some(regex::Regex::new(&query).map_err(|e| WtError::Tool(format!("invalid regex: {e}")))?)
+            Some(
+                regex::Regex::new(&query)
+                    .map_err(|e| WtError::Tool(format!("invalid regex: {e}")))?,
+            )
         } else {
             None
         };
@@ -300,7 +310,8 @@ impl ToolExecutor {
         if !cwd.is_dir() {
             return Err(WtError::Tool(format!("cwd is not a directory: {raw_cwd}")));
         }
-        let requested = u64_arg(args, "timeout_ms").unwrap_or(self.limits.command_timeout.as_millis() as u64);
+        let requested =
+            u64_arg(args, "timeout_ms").unwrap_or(self.limits.command_timeout.as_millis() as u64);
         let timeout = Duration::from_millis(requested).min(self.limits.command_timeout);
         let inherit_sensitive = bool_arg(args, "inherit_sensitive_env").unwrap_or(false);
         let started = Instant::now();
@@ -466,7 +477,9 @@ fn walk_tree(
     if output.len() >= max_entries {
         return Ok(());
     }
-    let mut entries: Vec<_> = std::fs::read_dir(directory)?.filter_map(|e| e.ok()).collect();
+    let mut entries: Vec<_> = std::fs::read_dir(directory)?
+        .filter_map(|e| e.ok())
+        .collect();
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         if output.len() >= max_entries {
@@ -554,7 +567,9 @@ fn search_path(
     }
     let text = String::from_utf8_lossy(&bytes);
     for (index, line) in text.lines().enumerate() {
-        let matched = regex.map(|r| r.is_match(line)).unwrap_or_else(|| line.contains(query));
+        let matched = regex
+            .map(|r| r.is_match(line))
+            .unwrap_or_else(|| line.contains(query));
         if matched {
             matches.push(json!({
                 "path": path.to_string_lossy(),
@@ -718,7 +733,9 @@ fn string_array_arg(value: &Value, key: &str) -> Result<Vec<String>> {
             .iter()
             .map(|item| match item {
                 Value::String(value) => Ok(value.clone()),
-                other => Err(WtError::Tool(format!("{key} must contain strings, got {other}"))),
+                other => Err(WtError::Tool(format!(
+                    "{key} must contain strings, got {other}"
+                ))),
             })
             .collect(),
         Value::String(text) if text.trim().is_empty() => Ok(Vec::new()),
@@ -727,7 +744,9 @@ fn string_array_arg(value: &Value, key: &str) -> Result<Vec<String>> {
                 .map_err(|e| WtError::Tool(format!("invalid {key} array: {e}")))
         }
         Value::String(text) => Ok(vec![text.clone()]),
-        other => Err(WtError::Tool(format!("{key} must be an array of strings, got {other}"))),
+        other => Err(WtError::Tool(format!(
+            "{key} must be an array of strings, got {other}"
+        ))),
     }
 }
 
@@ -739,7 +758,9 @@ mod tests {
     #[tokio::test]
     async fn read_and_edit_project_file() {
         let temp = tempfile::tempdir().unwrap();
-        tokio::fs::write(temp.path().join("a.txt"), "hello\n").await.unwrap();
+        tokio::fs::write(temp.path().join("a.txt"), "hello\n")
+            .await
+            .unwrap();
         let policy = PolicyEngine::new(temp.path().canonicalize().unwrap(), ApprovalMode::Auto);
         let executor = ToolExecutor::new(policy, Limits::default());
         let read = executor
@@ -756,6 +777,11 @@ mod tests {
             })
             .await;
         assert!(edit.ok);
-        assert_eq!(tokio::fs::read_to_string(temp.path().join("a.txt")).await.unwrap(), "world\n");
+        assert_eq!(
+            tokio::fs::read_to_string(temp.path().join("a.txt"))
+                .await
+                .unwrap(),
+            "world\n"
+        );
     }
 }
