@@ -6,11 +6,19 @@ updates:
       interval: weekly
     open-pull-requests-limit: 10
     groups:
-      rust-dependencies:
-        patterns:
-          - "*"
+      rust-patch-updates:
+        update-types:
+          - "patch"
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    groups:
+      github-actions-non-major:
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
