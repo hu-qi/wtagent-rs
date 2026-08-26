@@ -11,6 +11,7 @@ use wtagent_rs::{
         provider::{ProviderConfig, ProviderId},
         throttle::RateController,
     },
+    chatgpt_project::{list_chatgpt_projects, resolve_chatgpt_project},
     config::{default_app_data_dir, AppConfig, ApprovalMode},
     policy::PolicyEngine,
     runtime::{AgentRuntime, TerminalApproval},
@@ -36,6 +37,10 @@ struct Cli {
     /// Provider-specific mode, e.g. ChatGPT pro/current. Providers without a switcher keep their current mode.
     #[arg(long, global = true)]
     mode: Option<String>,
+
+    /// Create a new ChatGPT task inside this Project. Accepts an exact Project name or Project URL.
+    #[arg(long, global = true, value_name = "NAME_OR_URL")]
+    chatgpt_project: Option<String>,
 
     /// Project directory.
     #[arg(long, short = 'C', default_value = ".", global = true)]
@@ -95,6 +100,11 @@ enum Commands {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Inspect ChatGPT-specific resources.
+    Chatgpt {
+        #[command(subcommand)]
+        command: ChatGptCommands,
+    },
     /// Open the selected provider browser and wait for manual login when required.
     Login,
     /// Manage ego-lite Task Space ownership.
@@ -145,6 +155,15 @@ enum SessionOutputFormat {
 }
 
 #[derive(Debug, Subcommand)]
+enum ChatGptCommands {
+    /// List ChatGPT Projects visible in the authenticated browser session.
+    Projects {
+        #[arg(long, value_enum, default_value_t = SessionOutputFormat::Table)]
+        format: SessionOutputFormat,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum EgoCommands {
     /// Explicitly return the provider Task Space from user control to WTAgent-RS.
     Claim,
@@ -192,6 +211,7 @@ async fn run(cli: Cli) -> Result<()> {
             eprintln!("note: `wtagent sessions` is deprecated; use `wtagent session list`");
             print_session_list(*limit, SessionOutputFormat::Table).await
         }
+        Some(Commands::Chatgpt { command }) => chatgpt_command(&cli, command).await,
         Some(Commands::Doctor) => doctor(&cli).await,
         Some(Commands::Login) => login(&cli).await,
         Some(Commands::Ego { command }) => ego_command(&cli, command).await,
@@ -246,6 +266,36 @@ async fn session_command(cli: &Cli, command: Option<&SessionCommands>) -> Result
     }
 }
 
+async fn chatgpt_command(cli: &Cli, command: &ChatGptCommands) -> Result<()> {
+    let config = configured(cli, ProviderId::Chatgpt, cli.project.clone())?;
+    match command {
+        ChatGptCommands::Projects { format } => {
+            let projects = list_chatgpt_projects(&config).await?;
+            match format {
+                SessionOutputFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(&projects)?);
+                }
+                SessionOutputFormat::Table => {
+                    if projects.is_empty() {
+                        println!("No ChatGPT Projects were found in the authenticated account.");
+                        return Ok(());
+                    }
+                    println!("PROJECT ID                                      NAME / URL");
+                    for project in projects {
+                        println!(
+                            "{:<47} {} / {}",
+                            project.project_id,
+                            project.name.as_deref().unwrap_or("<unnamed>"),
+                            project.url
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 async fn print_session_list(limit: usize, format: SessionOutputFormat) -> Result<()> {
     let sessions = list_sessions(&default_app_data_dir()?, limit).await?;
     match format {
@@ -261,13 +311,20 @@ async fn print_session_list(limit: usize, format: SessionOutputFormat) -> Result
                 "SESSION                           PROVIDER  TURN  PHASE         PROJECT / TASK"
             );
             for state in sessions {
+                let remote_project = state
+                    .chatgpt_project
+                    .as_ref()
+                    .and_then(|project| project.name.as_deref())
+                    .map(|name| format!(" [ChatGPT:{name}]"))
+                    .unwrap_or_default();
                 println!(
-                    "{:<32}  {:<8}  {:>4}  {:<12}  {} / {}",
+                    "{:<32}  {:<8}  {:>4}  {:<12}  {}{} / {}",
                     state.session_id,
                     format!("{:?}", state.provider).to_ascii_lowercase(),
                     state.turn,
                     state.phase,
                     state.project_root.display(),
+                    remote_project,
                     state.task.lines().next().unwrap_or_default()
                 );
             }
@@ -286,6 +343,14 @@ fn print_session(state: &SessionState, format: SessionOutputFormat) -> Result<()
                 format!("{:?}", state.provider).to_ascii_lowercase()
             );
             println!("project: {}", state.project_root.display());
+            if let Some(project) = state.chatgpt_project.as_ref() {
+                println!(
+                    "chatgpt_project: {}",
+                    project.name.as_deref().unwrap_or("<unnamed>")
+                );
+                println!("chatgpt_project_id: {}", project.project_id);
+                println!("chatgpt_project_url: {}", project.url);
+            }
             println!("phase: {}", state.phase);
             println!("turn: {}", state.turn);
             println!(
@@ -311,8 +376,38 @@ async fn run_new(cli: &Cli, task: String, files: Vec<PathBuf>) -> Result<()> {
     let provider = cli.model.unwrap_or_default();
     let config = configured(cli, provider, cli.project.clone())?;
     validate_files(&files)?;
-    let session =
+
+    let project_binding = match cli.chatgpt_project.as_deref() {
+        Some(target) if provider == ProviderId::Chatgpt => {
+            Some(resolve_chatgpt_project(&config, target).await?)
+        }
+        Some(_) => {
+            return Err(WtError::Config(
+                "--chatgpt-project can only be used with --model chatgpt".into(),
+            ))
+        }
+        None => None,
+    };
+
+    let mut session =
         SessionStore::create(&config.app_data_dir, provider, &config.project_root, task).await?;
+    if let Some(binding) = project_binding {
+        eprintln!(
+            "chatgpt project: {} ({})",
+            binding.name.as_deref().unwrap_or(&binding.project_id),
+            binding.url
+        );
+        session.state.conversation_url = Some(binding.url.clone());
+        session.state.chatgpt_project = Some(binding.clone());
+        session.save().await?;
+        session
+            .append_event(
+                "chatgpt.project_bound",
+                serde_json::json!({"project": binding}),
+            )
+            .await?;
+    }
+
     let session_id = session.state.session_id.clone();
     eprintln!("session: {session_id}");
     let runtime = runtime_from(config, session);
@@ -322,6 +417,12 @@ async fn run_new(cli: &Cli, task: String, files: Vec<PathBuf>) -> Result<()> {
 }
 
 async fn resume(cli: &Cli, session_id: &str, instruction: String) -> Result<()> {
+    if cli.chatgpt_project.is_some() {
+        return Err(WtError::Config(
+            "--chatgpt-project is only used when creating a new session; resume uses the Project binding saved in the session"
+                .into(),
+        ));
+    }
     let app_data = default_app_data_dir()?;
     let session = SessionStore::load(&app_data, session_id).await?;
     let provider = cli.model.unwrap_or(session.state.provider);
@@ -429,6 +530,9 @@ async fn doctor(cli: &Cli) -> Result<()> {
         provider.label(),
         provider.config().base_url
     );
+    if let Some(target) = cli.chatgpt_project.as_deref() {
+        println!("  chatgpt project target: {target}");
+    }
     println!("  data dir: {}", config.app_data_dir.display());
     println!("  profile: {}", config.profile_dir().display());
     tokio::fs::create_dir_all(&config.app_data_dir).await?;
@@ -553,6 +657,34 @@ mod cli_tests {
                     limit: 5,
                     format: SessionOutputFormat::Json,
                 })
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_chatgpt_project_target() {
+        let cli = Cli::try_parse_from([
+            "wtagent",
+            "run",
+            "--chatgpt-project",
+            "OpenSource",
+            "inspect",
+        ])
+        .unwrap();
+        assert_eq!(cli.chatgpt_project.as_deref(), Some("OpenSource"));
+        assert!(matches!(cli.command, Some(Commands::Run { .. })));
+    }
+
+    #[test]
+    fn parses_chatgpt_projects_command() {
+        let cli = Cli::try_parse_from(["wtagent", "chatgpt", "projects", "--format", "json"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Chatgpt {
+                command: ChatGptCommands::Projects {
+                    format: SessionOutputFormat::Json
+                }
             })
         ));
     }
