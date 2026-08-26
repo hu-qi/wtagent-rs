@@ -159,9 +159,10 @@ fn extract_marked_payload(stdout: &str) -> Option<&str> {
             return None;
         }
 
-        let payload = line[marker_at + OUTPUT_MARKER_CORE.len()..].trim_start_matches(
-            |ch: char| ch.is_whitespace() || matches!(ch, '_' | '*' | '`' | ':'),
-        );
+        let payload =
+            line[marker_at + OUTPUT_MARKER_CORE.len()..].trim_start_matches(|ch: char| {
+                ch.is_whitespace() || matches!(ch, '_' | '*' | '`' | ':')
+            });
         (!payload.is_empty()).then_some(payload)
     })
 }
