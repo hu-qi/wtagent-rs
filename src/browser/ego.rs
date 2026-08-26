@@ -172,7 +172,11 @@ impl EgoClient {
                 runtime_diagnostic(&stdout, &stderr)
             ))
         })?;
-        debug!(source, payload_len = payload.len(), "ego WTAgent payload matched");
+        debug!(
+            source,
+            payload_len = payload.len(),
+            "ego WTAgent payload matched"
+        );
         serde_json::from_str(payload).map_err(WtError::Json)
     }
 }
@@ -346,11 +350,11 @@ mod tests {
         assert_eq!(
             extract_result_payload(
                 "",
-                r#"**WTAGENT\_JSON**{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}\n"#,
+                "**WTAGENT\\_JSON**{\"ok\":true,\"targetId\":\"FA61691809ACEDE7926D4C148184B16B\"}\n\n",
             ),
             Some((
                 "stderr",
-                r#"{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}\n"#
+                "{\"ok\":true,\"targetId\":\"FA61691809ACEDE7926D4C148184B16B\"}"
             ))
         );
     }
