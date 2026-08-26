@@ -3,19 +3,15 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ProviderId {
+    #[default]
     Chatgpt,
     Claude,
     Deepseek,
     Gemini,
     Kimi,
     Glm,
-}
-
-impl Default for ProviderId {
-    fn default() -> Self {
-        Self::Chatgpt
-    }
 }
 
 #[derive(Debug, Clone)]
