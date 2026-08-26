@@ -67,8 +67,7 @@ impl ChromePage {
         minimized: bool,
         preferred_url: Option<&str>,
     ) -> Result<Self> {
-        let backend =
-            resolve_browser_backend(browser_backend, chrome_override, ego_override)?;
+        let backend = resolve_browser_backend(browser_backend, chrome_override, ego_override)?;
         match backend {
             BrowserBackend::Chrome => {
                 Self::launch_chrome(
@@ -84,8 +83,9 @@ impl ChromePage {
                 let task_space = ego_task_space.map(ToOwned::to_owned).unwrap_or_else(|| {
                     format!("wtagent-rs-{:?}", provider.id).to_ascii_lowercase()
                 });
-                let ego = EgoClient::launch(provider, ego_override, task_space.clone(), preferred_url)
-                    .await?;
+                let ego =
+                    EgoClient::launch(provider, ego_override, task_space.clone(), preferred_url)
+                        .await?;
                 info!(
                     provider = provider.label,
                     task_space,
