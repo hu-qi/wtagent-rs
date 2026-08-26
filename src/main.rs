@@ -1,6 +1,6 @@
 use std::{ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use wtagent_rs::{
     browser::{
@@ -14,7 +14,7 @@ use wtagent_rs::{
     config::{default_app_data_dir, AppConfig, ApprovalMode},
     policy::PolicyEngine,
     runtime::{AgentRuntime, TerminalApproval},
-    session::{list_sessions, SessionStore},
+    session::{delete_session, latest_session_for_project, list_sessions, SessionState, SessionStore},
     tools::ToolExecutor,
     Result, WtError,
 };
@@ -83,6 +83,16 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         instruction: Vec<String>,
     },
+    /// Manage persistent WTAgent sessions.
+    Session {
+        #[command(subcommand)]
+        command: Option<SessionCommands>,
+    },
+    /// Legacy alias for `wtagent session list`.
+    Sessions {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Open the selected provider browser and wait for manual login when required.
     Login,
     /// Manage ego-lite Task Space ownership.
@@ -94,11 +104,42 @@ enum Commands {
     Doctor,
     /// List supported providers and their web endpoints.
     Providers,
-    /// List recent saved sessions.
-    Sessions {
-        #[arg(long, default_value_t = 20)]
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionCommands {
+    /// List recent sessions.
+    List {
+        #[arg(long, short = 'n', default_value_t = 20)]
         limit: usize,
+        #[arg(long, value_enum, default_value_t = SessionOutputFormat::Table)]
+        format: SessionOutputFormat,
     },
+    /// Show one session in detail.
+    Show {
+        session_id: String,
+        #[arg(long, value_enum, default_value_t = SessionOutputFormat::Table)]
+        format: SessionOutputFormat,
+    },
+    /// Resume a specific session.
+    Resume {
+        session_id: String,
+        #[arg(trailing_var_arg = true)]
+        instruction: Vec<String>,
+    },
+    /// Continue the most recently updated session for the current project.
+    Continue {
+        #[arg(trailing_var_arg = true)]
+        instruction: Vec<String>,
+    },
+    /// Delete a session and its local event/state data.
+    Delete { session_id: String },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SessionOutputFormat {
+    Table,
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -144,18 +185,10 @@ async fn run(cli: Cli) -> Result<()> {
             print_providers();
             Ok(())
         }
+        Some(Commands::Session { command }) => session_command(&cli, command.as_ref()).await,
         Some(Commands::Sessions { limit }) => {
-            for state in list_sessions(&default_app_data_dir()?, *limit).await? {
-                println!(
-                    "{}  {:<9} turn={:<3} phase={:<12} {}",
-                    state.session_id,
-                    format!("{:?}", state.provider).to_lowercase(),
-                    state.turn,
-                    state.phase,
-                    state.task.lines().next().unwrap_or_default()
-                );
-            }
-            Ok(())
+            eprintln!("note: `wtagent sessions` is deprecated; use `wtagent session list`");
+            print_session_list(*limit, SessionOutputFormat::Table).await
         }
         Some(Commands::Doctor) => doctor(&cli).await,
         Some(Commands::Login) => login(&cli).await,
@@ -171,6 +204,103 @@ async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
     }
+}
+
+async fn session_command(cli: &Cli, command: Option<&SessionCommands>) -> Result<()> {
+    match command {
+        None => print_session_list(20, SessionOutputFormat::Table).await,
+        Some(SessionCommands::List { limit, format }) => print_session_list(*limit, *format).await,
+        Some(SessionCommands::Show { session_id, format }) => {
+            let store = SessionStore::load(&default_app_data_dir()?, session_id).await?;
+            print_session(&store.state, *format)?;
+            Ok(())
+        }
+        Some(SessionCommands::Resume {
+            session_id,
+            instruction,
+        }) => resume(cli, session_id, instruction.join(" ")).await,
+        Some(SessionCommands::Continue { instruction }) => {
+            let project_config = configured(
+                cli,
+                cli.model.unwrap_or_default(),
+                cli.project.clone(),
+            )?;
+            let Some(state) = latest_session_for_project(
+                &project_config.app_data_dir,
+                &project_config.project_root,
+            )
+            .await?
+            else {
+                return Err(WtError::Session(format!(
+                    "no saved session found for project {}",
+                    project_config.project_root.display()
+                )));
+            };
+            eprintln!("continuing session: {}", state.session_id);
+            resume(cli, &state.session_id, instruction.join(" ")).await
+        }
+        Some(SessionCommands::Delete { session_id }) => {
+            delete_session(&default_app_data_dir()?, session_id).await?;
+            println!("deleted session: {session_id}");
+            Ok(())
+        }
+    }
+}
+
+async fn print_session_list(limit: usize, format: SessionOutputFormat) -> Result<()> {
+    let sessions = list_sessions(&default_app_data_dir()?, limit).await?;
+    match format {
+        SessionOutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&sessions)?);
+        }
+        SessionOutputFormat::Table => {
+            if sessions.is_empty() {
+                println!("No saved sessions.");
+                return Ok(());
+            }
+            println!("SESSION                           PROVIDER  TURN  PHASE         PROJECT / TASK");
+            for state in sessions {
+                println!(
+                    "{:<32}  {:<8}  {:>4}  {:<12}  {} / {}",
+                    state.session_id,
+                    format!("{:?}", state.provider).to_ascii_lowercase(),
+                    state.turn,
+                    state.phase,
+                    state.project_root.display(),
+                    state.task.lines().next().unwrap_or_default()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_session(state: &SessionState, format: SessionOutputFormat) -> Result<()> {
+    match format {
+        SessionOutputFormat::Json => println!("{}", serde_json::to_string_pretty(state)?),
+        SessionOutputFormat::Table => {
+            println!("session: {}", state.session_id);
+            println!(
+                "provider: {}",
+                format!("{:?}", state.provider).to_ascii_lowercase()
+            );
+            println!("project: {}", state.project_root.display());
+            println!("phase: {}", state.phase);
+            println!("turn: {}", state.turn);
+            println!("mode: {}", state.active_mode.as_deref().unwrap_or("site-current"));
+            println!(
+                "conversation: {}",
+                state.conversation_url.as_deref().unwrap_or("-")
+            );
+            println!("created_at_ms: {}", state.created_at_ms);
+            println!("updated_at_ms: {}", state.updated_at_ms);
+            println!("task: {}", state.task);
+            if let Some(message) = state.last_message.as_deref() {
+                println!("last_message: {message}");
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn run_new(cli: &Cli, task: String, files: Vec<PathBuf>) -> Result<()> {
@@ -390,5 +520,42 @@ fn parse_cli_with_bare_task() -> Cli {
             }
             first.exit();
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn session_without_subcommand_is_management_not_task() {
+        let cli = Cli::try_parse_from(["wtagent", "session"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Session { command: None })
+        ));
+    }
+
+    #[test]
+    fn parses_session_list_json() {
+        let cli = Cli::try_parse_from([
+            "wtagent",
+            "session",
+            "list",
+            "--limit",
+            "5",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Session {
+                command: Some(SessionCommands::List {
+                    limit: 5,
+                    format: SessionOutputFormat::Json,
+                })
+            })
+        ));
     }
 }
