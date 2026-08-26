@@ -677,8 +677,8 @@ mod cli_tests {
 
     #[test]
     fn parses_chatgpt_projects_command() {
-        let cli = Cli::try_parse_from(["wtagent", "chatgpt", "projects", "--format", "json"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["wtagent", "chatgpt", "projects", "--format", "json"]).unwrap();
         assert!(matches!(
             cli.command,
             Some(Commands::Chatgpt {
