@@ -98,9 +98,7 @@ impl SessionStore {
     }
 
     pub async fn load(app_data_dir: &Path, session_id: &str) -> Result<Self> {
-        if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
-            return Err(WtError::Session("invalid session id".into()));
-        }
+        validate_session_id(session_id)?;
         let directory = app_data_dir.join("sessions").join(session_id);
         let state_path = directory.join("state.json");
         let events_path = directory.join("events.jsonl");
@@ -246,6 +244,39 @@ pub async fn list_sessions(app_data_dir: &Path, limit: usize) -> Result<Vec<Sess
     Ok(output)
 }
 
+pub async fn latest_session_for_project(
+    app_data_dir: &Path,
+    project_root: &Path,
+) -> Result<Option<SessionState>> {
+    let sessions = list_sessions(app_data_dir, usize::MAX).await?;
+    Ok(sessions
+        .into_iter()
+        .find(|state| state.project_root == project_root))
+}
+
+pub async fn delete_session(app_data_dir: &Path, session_id: &str) -> Result<()> {
+    validate_session_id(session_id)?;
+    let directory = app_data_dir.join("sessions").join(session_id);
+    match tokio::fs::remove_dir_all(&directory).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(WtError::Session(
+            format!("cannot delete session {session_id}: session does not exist"),
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate_session_id(session_id: &str) -> Result<()> {
+    if session_id.is_empty()
+        || session_id.contains('/')
+        || session_id.contains('\\')
+        || session_id.contains("..")
+    {
+        return Err(WtError::Session("invalid session id".into()));
+    }
+    Ok(())
+}
+
 fn timestamp_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -289,5 +320,45 @@ mod tests {
         let id = store.state.session_id.clone();
         let loaded = SessionStore::load(temp.path(), &id).await.unwrap();
         assert_eq!(loaded.state.phase, "running");
+    }
+
+    #[tokio::test]
+    async fn finds_latest_session_for_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        let other = temp.path().join("other");
+        tokio::fs::create_dir_all(&project).await.unwrap();
+        tokio::fs::create_dir_all(&other).await.unwrap();
+
+        SessionStore::create(temp.path(), ProviderId::Chatgpt, &other, "other".into())
+            .await
+            .unwrap();
+        let mut expected =
+            SessionStore::create(temp.path(), ProviderId::Chatgpt, &project, "current".into())
+                .await
+                .unwrap();
+        expected.update_phase("idle").await.unwrap();
+
+        let latest = latest_session_for_project(temp.path(), &project)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest.session_id, expected.state.session_id);
+    }
+
+    #[tokio::test]
+    async fn deletes_session_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        tokio::fs::create_dir_all(&project).await.unwrap();
+        let store =
+            SessionStore::create(temp.path(), ProviderId::Chatgpt, &project, "delete".into())
+                .await
+                .unwrap();
+        let id = store.state.session_id.clone();
+        assert!(store.directory().exists());
+
+        delete_session(temp.path(), &id).await.unwrap();
+        assert!(!store.directory().exists());
     }
 }
