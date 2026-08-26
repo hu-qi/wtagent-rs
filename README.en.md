@@ -10,13 +10,20 @@ This is not a mechanical JavaScript-to-Rust translation. The rewrite targets the
 cargo install --git https://github.com/hu-qi/wtagent-rs
 ```
 
-Runtime requirements:
+Choose one browser path:
 
-- Chrome or Chromium;
-- a legitimate account for the selected web provider and available quota;
-- manual sign-in once in WTAgent-RS's dedicated provider profile.
+- on macOS, install [ego-lite](https://github.com/citrolabs/ego-lite), finish onboarding, and make sure `ego-browser` is available. WTAgent-RS will prefer it automatically and reuse existing browser login state;
+- or install Chrome/Chromium. Linux and Windows currently use Chrome/Chromium by default.
 
-No Node.js runtime and no model API key are required.
+A legitimate account and available quota for the selected provider are still required. No model API key is required, and using ego-lite does not require the user to install a separate Node.js runtime for WTAgent-RS.
+
+Start with:
+
+```bash
+wtagent doctor
+```
+
+It reports whether the resolved browser backend is `ego` or `chrome`.
 
 ## Quick usage
 
@@ -42,6 +49,31 @@ wtagent providers
 wtagent sessions
 wtagent resume <SESSION_ID> "continue and run the complete test suite"
 ```
+
+## Browser backends
+
+### ego-lite
+
+On macOS, when `ego-browser` is visible on `PATH` or at `~/.local/bin/ego-browser`, WTAgent-RS prefers ego-lite automatically. It does not pretend ego-lite is a Chrome executable; it invokes the official `ego-browser nodejs` runtime and uses Task Spaces plus raw `cdp()` calls.
+
+Each provider gets a stable Task Space, for example:
+
+```text
+wtagent-rs-chatgpt
+wtagent-rs-claude
+```
+
+Task Spaces are isolated from normal user tabs while inheriting login state available to ego-lite.
+
+### Chrome / Chromium
+
+When ego-lite is unavailable, WTAgent-RS keeps the original CDP backend with a dedicated provider profile, `DevToolsActivePort`, and a direct WebSocket CDP connection. Passing `--chrome-path` explicitly forces Chrome:
+
+```bash
+wtagent --chrome-path /path/to/chrome doctor
+```
+
+See [Browser Backends](./docs/en/browser-backends.md) for details.
 
 ## Key changes from the Node.js upstream
 
@@ -75,9 +107,9 @@ Write/execute operations are persisted as `Started` before execution and `Comple
 ## Approval modes
 
 ```bash
-wtagent --approval ask "..."       # default: read auto, side effects prompt
-wtagent --approval auto "..."      # auto-approve project-local side effects
-wtagent --approval read-only "..." # deny writes and execution
+wtagent --approval ask "..."
+wtagent --approval auto "..."
+wtagent --approval read-only "..."
 ```
 
 Path policy always rejects parent traversal and project-external absolute paths.
@@ -103,6 +135,8 @@ Attachment upload is best-effort and depends on the provider's current DOM.
 
 ## Session storage
 
+Chrome mode stores dedicated provider profiles under the system application-data directory. ego-lite owns its browser data and Task Spaces. WTAgent-RS session state remains separate:
+
 ```text
 wtagent-rs/
   profiles/<provider-profile>/
@@ -115,12 +149,18 @@ Provider browser profiles live outside the project so cookies and login state ar
 
 ## Platforms and CI
 
-Target platforms: macOS, Linux, Windows 10/11. WSL2 is best-effort because GUI Chrome availability depends on WSLg and the distribution.
+Target platforms:
+
+- macOS: ego-lite or Chrome/Chromium;
+- Linux: Chrome/Chromium;
+- Windows 10/11: Chrome/Chromium;
+- WSL2: best-effort because GUI Chrome availability depends on WSLg and the distribution.
 
 CI covers native Ubuntu/macOS/Windows test jobs, rustfmt, Clippy, docs, MSRV, package checks, and security auditing. Release automation produces native binaries on version tags.
 
 ## More documentation
 
+- [Browser Backends](./docs/en/browser-backends.md)
 - [Architecture](./docs/en/architecture.md)
 - [Limits & Reliability](./docs/en/limits-and-reliability.md)
 - [Provider Adapter Maintenance](./docs/en/provider-adapters.md)
