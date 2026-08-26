@@ -96,9 +96,6 @@ impl RateController {
                 state.blocked_until = Some(now + Duration::from_secs(5 * 60));
             }
             ProviderOutcome::UsageLimit => {
-                // An explicit account/plan usage limit is not something to retry around.
-                // Hold automatic sends for one hour; the runtime also surfaces the
-                // limit immediately to the user instead of retrying.
                 state.penalty_level = state.penalty_level.saturating_add(4);
                 state.blocked_until = Some(now + Duration::from_secs(60 * 60));
             }
@@ -148,24 +145,5 @@ impl RateController {
             .base_backoff
             .saturating_mul(multiplier)
             .min(self.config.max_backoff)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn planned_delay_for(
-        config: RateConfig,
-        since_last: Duration,
-        recent_count: usize,
-    ) -> Duration {
-        let controller = Self::new(config);
-        let now = Instant::now();
-        let state = RateState {
-            last_send: Some(now - since_last),
-            recent_sends: (0..recent_count)
-                .map(|_| now - Duration::from_secs(1))
-                .collect(),
-            blocked_until: None,
-            penalty_level: 0,
-        };
-        controller.next_delay(&state, now)
     }
 }
