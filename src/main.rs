@@ -5,7 +5,9 @@ use tracing_subscriber::EnvFilter;
 use wtagent_rs::{
     browser::{
         adapter::{BrowserWebAdapter, WebAdapter},
+        backend::{resolve_browser_backend, BrowserBackend},
         chrome::discover_chrome,
+        ego::discover_ego,
         provider::{ProviderConfig, ProviderId},
         throttle::RateController,
     },
@@ -37,7 +39,7 @@ struct Cli {
     #[arg(long, short = 'C', default_value = ".", global = true)]
     project: PathBuf,
 
-    /// Explicit Chrome/Chromium executable.
+    /// Explicit Chrome/Chromium executable. Supplying this forces the Chrome backend.
     #[arg(long, global = true)]
     chrome_path: Option<PathBuf>,
 
@@ -81,9 +83,9 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         instruction: Vec<String>,
     },
-    /// Open the dedicated provider profile and wait for manual login.
+    /// Open the selected provider browser and wait for manual login when required.
     Login,
-    /// Check Chrome, project paths, provider metadata, and data directories.
+    /// Check browser backend, project paths, provider metadata, and data directories.
     Doctor,
     /// List supported providers and their web endpoints.
     Providers,
@@ -108,7 +110,7 @@ async fn main() {
             }
             WtError::Challenge(_) => {
                 eprintln!(
-                    "Complete the challenge manually in the dedicated Chrome profile; WTAgent-RS does not bypass CAPTCHAs or anti-bot checks."
+                    "Complete the challenge manually in the active browser; WTAgent-RS does not bypass CAPTCHAs or anti-bot checks."
                 );
             }
             _ => {}
@@ -226,17 +228,17 @@ async fn login(cli: &Cli) -> Result<()> {
         false,
     );
     adapter.launch(None).await?;
-    adapter.start_conversation(None).await?;
     if adapter.auth_state().await? == wtagent_rs::browser::adapter::AuthState::Authenticated {
         println!("{} is already signed in.", provider.label());
         return Ok(());
     }
     eprintln!(
-        "Sign in manually in Chrome. This command does not automate credentials or challenges."
+        "Sign in manually in the active browser. WTAgent-RS does not automate credentials or challenges."
     );
     adapter
         .wait_for_manual_login(Duration::from_secs(10 * 60))
         .await?;
+    adapter.start_conversation(None).await?;
     println!("{} login detected.", provider.label());
     Ok(())
 }
@@ -254,8 +256,27 @@ async fn doctor(cli: &Cli) -> Result<()> {
     println!("  data dir: {}", config.app_data_dir.display());
     println!("  profile: {}", config.profile_dir().display());
     tokio::fs::create_dir_all(&config.app_data_dir).await?;
-    let chrome = discover_chrome(config.chrome_path.as_deref())?;
-    println!("  chrome: {}", chrome.display());
+    let backend = resolve_browser_backend(
+        BrowserBackend::Auto,
+        config.chrome_path.as_deref(),
+        None,
+    )?;
+    println!("  browser backend: {backend}");
+    match backend {
+        BrowserBackend::Chrome => {
+            let chrome = discover_chrome(config.chrome_path.as_deref())?;
+            println!("  chrome: {}", chrome.display());
+        }
+        BrowserBackend::Ego => {
+            let ego = discover_ego(None)?;
+            println!("  ego-browser: {}", ego.display());
+            println!(
+                "  ego task space: wtagent-rs-{}",
+                format!("{:?}", provider).to_ascii_lowercase()
+            );
+        }
+        BrowserBackend::Auto => unreachable!("doctor resolves auto before reporting"),
+    }
     println!(
         "  rate policy: min={}ms, max={}/minute",
         cli.min_send_interval_ms, cli.max_sends_per_minute
