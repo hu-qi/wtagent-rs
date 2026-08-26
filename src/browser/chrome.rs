@@ -10,7 +10,13 @@ use tokio::{process::Child, process::Command};
 use tracing::{debug, info};
 
 use crate::{
-    browser::{cdp::CdpClient, provider::ProviderConfig},
+    browser::{
+        backend::{resolve_browser_backend, BrowserBackend},
+        cdp::CdpClient,
+        client::BrowserClient,
+        ego::EgoClient,
+        provider::ProviderConfig,
+    },
     error::{Result, WtError},
 };
 
@@ -24,13 +30,79 @@ struct DevtoolsTarget {
 }
 
 pub struct ChromePage {
-    pub cdp: CdpClient,
-    pub debug_port: u16,
+    pub cdp: BrowserClient,
+    pub debug_port: Option<u16>,
     _child: Option<Child>,
 }
 
 impl ChromePage {
     pub async fn launch(
+        provider: &ProviderConfig,
+        profile_dir: &Path,
+        chrome_override: Option<&Path>,
+        minimized: bool,
+        preferred_url: Option<&str>,
+    ) -> Result<Self> {
+        Self::launch_with_backend(
+            provider,
+            profile_dir,
+            BrowserBackend::Auto,
+            chrome_override,
+            None,
+            None,
+            minimized,
+            preferred_url,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn launch_with_backend(
+        provider: &ProviderConfig,
+        profile_dir: &Path,
+        browser_backend: BrowserBackend,
+        chrome_override: Option<&Path>,
+        ego_override: Option<&Path>,
+        ego_task_space: Option<&str>,
+        minimized: bool,
+        preferred_url: Option<&str>,
+    ) -> Result<Self> {
+        let backend = resolve_browser_backend(browser_backend, chrome_override, ego_override)?;
+        match backend {
+            BrowserBackend::Chrome => {
+                Self::launch_chrome(
+                    provider,
+                    profile_dir,
+                    chrome_override,
+                    minimized,
+                    preferred_url,
+                )
+                .await
+            }
+            BrowserBackend::Ego => {
+                let task_space = ego_task_space.map(ToOwned::to_owned).unwrap_or_else(|| {
+                    format!("wtagent-rs-{:?}", provider.id).to_ascii_lowercase()
+                });
+                let ego =
+                    EgoClient::launch(provider, ego_override, task_space.clone(), preferred_url)
+                        .await?;
+                info!(
+                    provider = provider.label,
+                    task_space,
+                    executable = %ego.executable().display(),
+                    "using ego-lite browser backend"
+                );
+                Ok(Self {
+                    cdp: BrowserClient::ego(ego),
+                    debug_port: None,
+                    _child: None,
+                })
+            }
+            BrowserBackend::Auto => unreachable!("auto backend must be resolved before launch"),
+        }
+    }
+
+    async fn launch_chrome(
         provider: &ProviderConfig,
         profile_dir: &Path,
         chrome_override: Option<&Path>,
@@ -76,8 +148,8 @@ impl ChromePage {
         let cdp = CdpClient::connect(&ws).await?;
 
         Ok(Self {
-            cdp,
-            debug_port: port,
+            cdp: BrowserClient::chrome(cdp),
+            debug_port: Some(port),
             _child: child,
         })
     }
@@ -208,7 +280,8 @@ pub fn discover_chrome(override_path: Option<&Path>) -> Result<PathBuf> {
         .find(|path| path.is_file())
         .ok_or_else(|| {
             WtError::Config(
-                "Chrome/Chromium was not found. Install Chrome or pass --chrome-path.".into(),
+                "Chrome/Chromium was not found. Install Chrome, install ego-lite, or pass --chrome-path."
+                    .into(),
             )
         })
 }

@@ -2,6 +2,19 @@
 
 All notable changes to WTAgent-RS are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Native ego-lite browser backend through the official `ego-browser` Task Space runtime.
+- macOS browser auto-discovery that prefers ego-lite when available and falls back to Chrome/Chromium.
+- Shared browser client abstraction so provider adapters reuse the same DOM/CDP logic across ego-lite and Chrome.
+- Chinese and English browser-backend documentation and backend-aware `wtagent doctor` output.
+
+### Fixed
+
+- `wtagent login` no longer tries to start a provider conversation before authentication is detected.
+
 ## [0.1.0] - 2026-08-26
 
 ### Added

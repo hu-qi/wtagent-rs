@@ -4,27 +4,40 @@
 >
 > `WTAgent-RS` is an independent Rust implementation. It preserves the MIT attribution of the upstream project and focuses on reliability, lower web-turn volume, cross-platform binaries, and conservative handling of provider limits.
 
-[中文文档](./README.zh-CN.md) · [English Documentation](./README.en.md) · [架构 / Architecture](./docs/zh-CN/architecture.md) · [限制与稳定性 / Limits & Reliability](./docs/zh-CN/limits-and-reliability.md)
+[中文文档](./README.zh-CN.md) · [English Documentation](./README.en.md) · [浏览器后端 / Browser Backends](./docs/zh-CN/browser-backends.md) · [架构 / Architecture](./docs/zh-CN/architecture.md) · [限制与稳定性 / Limits & Reliability](./docs/zh-CN/limits-and-reliability.md)
 
 ## Why Rust / 为什么用 Rust
 
-- Single native CLI binary; no Node.js runtime required.
+- Single native CLI binary; no separate Node.js installation is required by the WTAgent-RS runtime.
 - Strongly typed runtime boundaries for browser, protocol, policy, tools, and session state.
 - Cross-platform CI for Linux, macOS, and Windows, plus MSRV, Clippy, rustfmt, docs, packaging, and security audit workflows.
 - Crash-aware side-effect journal: a write/execute operation marked as started but not completed is **not replayed automatically** after interruption.
 - Lower provider traffic: up to **4 read-only local tools** may be batched in one model turn and their results are returned in one web message.
 - Conservative provider pacing and explicit limit handling. WTAgent-RS **does not** bypass CAPTCHAs, spoof browser fingerprints, rotate accounts, or retry around explicit plan/usage limits.
 
+## Browser backends / 浏览器后端
+
+WTAgent-RS supports two browser transports:
+
+- **ego-lite / `ego-browser`** — preferred automatically on macOS when `ego-browser` is installed. It uses an isolated ego-lite Task Space while inheriting the user's existing browser login state.
+- **Chrome/Chromium CDP** — the portable fallback on macOS and the default path on Linux/Windows. It uses a dedicated WTAgent-RS browser profile and the Chrome DevTools Protocol.
+
+`auto` selection is conservative: an explicit `--chrome-path` always forces the Chrome backend; otherwise macOS checks `PATH` and `~/.local/bin/ego-browser` before falling back to Chrome. Linux/Windows continue to use Chrome/Chromium because ego-lite currently ships primarily for macOS.
+
+After installing ego-lite, finish its onboarding once so the `ego-browser` command is registered. `wtagent doctor` reports the backend WTAgent-RS actually resolved.
+
+See [中文：浏览器后端](./docs/zh-CN/browser-backends.md) or [English: Browser Backends](./docs/en/browser-backends.md).
+
 ## Supported web providers / 支持的网页模型
 
-| Provider | Web endpoint | Dedicated profile | Default behavior |
+| Provider | Web endpoint | Browser state | Default behavior |
 | --- | --- | --- | --- |
-| ChatGPT | `chatgpt.com` | Yes | Keep current mode unless requested |
-| Claude | `claude.ai` | Yes | Keep site-selected model |
-| DeepSeek | `chat.deepseek.com` | Yes | Prefer Expert + Deep Thinking |
-| Gemini | `gemini.google.com` | Yes | Keep site-selected model |
-| Kimi | `kimi.com` | Yes | Prefer K3 |
-| GLM / Z.ai | `chat.z.ai` | Yes | Prefer newest available GLM |
+| ChatGPT | `chatgpt.com` | ego Task Space or dedicated Chrome profile | Keep current mode unless requested |
+| Claude | `claude.ai` | ego Task Space or dedicated Chrome profile | Keep site-selected model |
+| DeepSeek | `chat.deepseek.com` | ego Task Space or dedicated Chrome profile | Prefer Expert + Deep Thinking |
+| Gemini | `gemini.google.com` | ego Task Space or dedicated Chrome profile | Keep site-selected model |
+| Kimi | `kimi.com` | ego Task Space or dedicated Chrome profile | Prefer K3 |
+| GLM / Z.ai | `chat.z.ai` | ego Task Space or dedicated Chrome profile | Prefer newest available GLM |
 
 Web UIs change frequently. Provider DOM selectors are intentionally isolated in `src/browser/provider.rs` and `src/browser/adapter.rs` so a site change does not spread into the runtime or local tools.
 
@@ -34,6 +47,7 @@ Web UIs change frequently. Provider DOM selectors are intentionally isolated in 
 cargo install --git https://github.com/hu-qi/wtagent-rs
 
 mkdir demo && cd demo
+wtagent doctor
 wtagent "Create hello.txt, verify it, and summarize what changed"
 ```
 
@@ -54,7 +68,7 @@ wtagent sessions
 wtagent resume <SESSION_ID> "continue and run the tests"
 ```
 
-The first run opens a dedicated visible Chrome/Chromium profile. Sign in manually. Credentials stay in the browser profile; WTAgent-RS does not ask for or store your provider password.
+With ego-lite available on macOS, WTAgent-RS opens/reuses a dedicated Task Space such as `wtagent-rs-chatgpt` and can reuse the user's existing login state. Without ego-lite it opens a dedicated visible Chrome/Chromium profile. Credentials remain in the selected browser; WTAgent-RS does not ask for or store provider passwords.
 
 ## Limit-safety design / 限制友好设计
 
@@ -63,7 +77,7 @@ The main optimization is **fewer and better web turns**, not evasion:
 1. Read-only batching: max 4 local reads/searches/list/process reads per assistant turn.
 2. One aggregate tool-result message per batch.
 3. Deterministic result compaction under a byte budget.
-4. Persistent provider Chrome profiles and resumable conversations; fewer new-chat/login cycles.
+4. Persistent browser state and resumable conversations; fewer new-chat/login cycles.
 5. Default 4s + bounded jitter pacing and a rolling 6 sends/minute ceiling; both are configurable.
 6. Transient rate-limit signals stop the current run instead of generating a retry burst.
 7. Explicit account/plan usage-limit messages are a hard stop. Resume only after the provider resets or the user changes mode/plan manually.
@@ -79,7 +93,7 @@ Local tool requests from the web model are **requests, not authority**. The Rust
 
 ## Status
 
-This repository is a Rust rewrite rather than a drop-in byte-for-byte port. The architecture and interaction model are compatible with the upstream intent, while the browser automation implementation is intentionally smaller and more conservative. Because web-provider DOMs are external and mutable, live-provider compatibility should be treated as continuously maintained integration behavior rather than a permanent guarantee.
+This repository is a Rust rewrite rather than a drop-in byte-for-byte port. The architecture and interaction model are compatible with the upstream intent, while the browser automation implementation is intentionally smaller and more conservative. Because web-provider DOMs and browser integrations are external and mutable, live-provider compatibility should be treated as continuously maintained integration behavior rather than a permanent guarantee.
 
 ## License and attribution
 
