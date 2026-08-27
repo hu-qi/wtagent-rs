@@ -12,6 +12,7 @@ use crate::{
 };
 
 const PROJECTS_URL: &str = "https://chatgpt.com/projects";
+const PROJECT_NAVIGATION_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChatGptProjectBinding {
@@ -64,6 +65,29 @@ impl ChatGptProjectBinding {
             project_id: project_id.to_string(),
         })
     }
+
+    fn from_navigation_url(value: &str, name: String) -> Result<Self> {
+        let url = Url::parse(value).map_err(|e| {
+            WtError::Browser(format!(
+                "ChatGPT Project {name:?} navigated to an invalid URL {value:?}: {e}"
+            ))
+        })?;
+        if url.scheme() != "https" || url.host_str() != Some("chatgpt.com") {
+            return Err(WtError::Browser(format!(
+                "ChatGPT Project {name:?} navigated outside chatgpt.com: {value}"
+            )));
+        }
+        let segments: Vec<_> = url
+            .path_segments()
+            .map(|segments| segments.filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default();
+        if segments.len() < 2 || segments[0] != "g" || !segments[1].starts_with("g-p-") {
+            return Err(WtError::Browser(format!(
+                "ChatGPT Project {name:?} did not navigate to a Project route: {value}"
+            )));
+        }
+        Self::from_project_id(segments[1], Some(name))
+    }
 }
 
 pub async fn resolve_chatgpt_project(
@@ -111,21 +135,29 @@ pub async fn list_chatgpt_projects(config: &AppConfig) -> Result<Vec<ChatGptProj
     )
     .await?;
 
+    wait_for_project_directory(&page).await?;
     let current_url = page.cdp.current_url().await.unwrap_or_default();
     debug!(url = %current_url, "ChatGPT Project discovery page ready");
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
-    let mut last = Vec::new();
-    while tokio::time::Instant::now() < deadline {
-        last = discover_projects(&page).await?;
-        debug!(
-            count = last.len(),
-            "ChatGPT Project discovery pass completed"
-        );
-        if !last.is_empty() {
-            return Ok(last);
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+    // Keep the cheap href/HTML path for versions of ChatGPT that expose Project
+    // routes directly. The current Projects UI renders project rows as SPA click
+    // targets without hrefs, so native row navigation is the authoritative fallback.
+    let direct = discover_projects_from_routes(&page).await?;
+    debug!(
+        count = direct.len(),
+        "ChatGPT direct Project route discovery completed"
+    );
+    if !direct.is_empty() {
+        return Ok(direct);
+    }
+
+    let projects = discover_projects_interactively(&page).await?;
+    debug!(
+        count = projects.len(),
+        "ChatGPT interactive Project discovery completed"
+    );
+    if !projects.is_empty() {
+        return Ok(projects);
     }
 
     let body = page.cdp.body_text().await.unwrap_or_default();
@@ -135,10 +167,143 @@ pub async fn list_chatgpt_projects(config: &AppConfig) -> Result<Vec<ChatGptProj
             "ChatGPT is not signed in; run `wtagent login --model chatgpt` first".into(),
         ));
     }
-    Ok(last)
+    Ok(projects)
 }
 
-async fn discover_projects(page: &ChromePage) -> Result<Vec<ChatGptProjectBinding>> {
+async fn wait_for_project_directory(page: &ChromePage) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+    while tokio::time::Instant::now() < deadline {
+        let names = project_row_names(page).await?;
+        if !names.is_empty() {
+            debug!(
+                count = names.len(),
+                "ChatGPT Project directory rows are ready"
+            );
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    let body = page.cdp.body_text().await.unwrap_or_default();
+    let lower = body.to_ascii_lowercase();
+    if lower.contains("log in") || lower.contains("sign up") || body.contains("登录") {
+        return Err(WtError::Authentication(
+            "ChatGPT is not signed in; run `wtagent login --model chatgpt` first".into(),
+        ));
+    }
+
+    Err(WtError::Browser(
+        "ChatGPT Projects page loaded, but no project directory rows became available".into(),
+    ))
+}
+
+async fn project_row_names(page: &ChromePage) -> Result<Vec<String>> {
+    let value = page
+        .cdp
+        .evaluate(
+            r#"(() => {
+                const prefix = 'Open project options for ';
+                const names = [];
+                for (const row of document.querySelectorAll('[role="row"]')) {
+                    const button = [...row.querySelectorAll('button[aria-label]')]
+                        .find((el) => (el.getAttribute('aria-label') || '').startsWith(prefix));
+                    if (!button) continue;
+                    const name = (button.getAttribute('aria-label') || '').slice(prefix.length).trim();
+                    if (name && !names.includes(name)) names.push(name);
+                }
+                return names;
+            })()"#,
+        )
+        .await?;
+    let array = value.as_array().ok_or_else(|| {
+        WtError::Browser("ChatGPT Project row discovery returned a non-array value".into())
+    })?;
+    Ok(array
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+async fn discover_projects_interactively(page: &ChromePage) -> Result<Vec<ChatGptProjectBinding>> {
+    let names = project_row_names(page).await?;
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut projects = Vec::with_capacity(names.len());
+    for name in names {
+        click_project_row(page, &name).await?;
+        let binding = wait_for_project_navigation(page, &name).await?;
+        debug!(
+            name = %name,
+            project_id = %binding.project_id,
+            url = %binding.url,
+            "ChatGPT Project route resolved through native navigation"
+        );
+        projects.push(binding);
+
+        page.cdp.navigate(PROJECTS_URL).await?;
+        wait_for_project_directory(page).await?;
+    }
+
+    projects.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.url.cmp(&b.url)));
+    projects.dedup_by(|a, b| a.project_id == b.project_id);
+    Ok(projects)
+}
+
+async fn click_project_row(page: &ChromePage, name: &str) -> Result<()> {
+    let wanted = serde_json::to_string(name)?;
+    let expression = format!(
+        r#"(() => {{
+            const wanted = {wanted};
+            const prefix = 'Open project options for ';
+            for (const row of document.querySelectorAll('[role="row"]')) {{
+                const button = [...row.querySelectorAll('button[aria-label]')]
+                    .find((el) => (el.getAttribute('aria-label') || '').startsWith(prefix));
+                if (!button) continue;
+                const candidate = (button.getAttribute('aria-label') || '').slice(prefix.length).trim();
+                if (candidate !== wanted) continue;
+                if (!(row instanceof HTMLElement)) return false;
+                row.click();
+                return true;
+            }}
+            return false;
+        }})()"#
+    );
+    let clicked = page.cdp.evaluate_bool(&expression).await?;
+    if !clicked {
+        return Err(WtError::Browser(format!(
+            "ChatGPT Project row {name:?} disappeared before it could be opened"
+        )));
+    }
+    Ok(())
+}
+
+async fn wait_for_project_navigation(
+    page: &ChromePage,
+    name: &str,
+) -> Result<ChatGptProjectBinding> {
+    let deadline = tokio::time::Instant::now() + PROJECT_NAVIGATION_TIMEOUT;
+    let mut last_url = String::new();
+    while tokio::time::Instant::now() < deadline {
+        last_url = page.cdp.current_url().await.unwrap_or_default();
+        if let Ok(binding) = ChatGptProjectBinding::from_navigation_url(&last_url, name.to_string())
+        {
+            return Ok(binding);
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    Err(WtError::Browser(format!(
+        "ChatGPT Project {name:?} did not navigate to a Project URL within {}s; last URL: {last_url}",
+        PROJECT_NAVIGATION_TIMEOUT.as_secs()
+    )))
+}
+
+async fn discover_projects_from_routes(page: &ChromePage) -> Result<Vec<ChatGptProjectBinding>> {
     let value = page
         .cdp
         .evaluate(
@@ -177,9 +342,6 @@ async fn discover_projects(page: &ChromePage) -> Result<Vec<ChatGptProjectBindin
                     add(href, text, score);
                 }
 
-                // React/Next may keep route hrefs in rendered data before they become
-                // concrete anchors. Discover project ids from the live HTML as a
-                // fallback; names are intentionally left unset in this path.
                 const html = document.documentElement?.innerHTML || '';
                 const patterns = [
                     /\/g\/(g-p-[A-Za-z0-9_-]+)\/(?:project|c\/[^\"'<>\\\s]+)/g,
@@ -266,6 +428,33 @@ mod tests {
             projects[0].url,
             "https://chatgpt.com/g/g-p-123-opensource/project"
         );
+    }
+
+    #[test]
+    fn resolves_project_binding_from_native_navigation() {
+        let project = ChatGptProjectBinding::from_navigation_url(
+            "https://chatgpt.com/g/g-p-123-opensource/c/abcdef?foo=bar",
+            "OpenSource".into(),
+        )
+        .unwrap();
+        assert_eq!(project.name.as_deref(), Some("OpenSource"));
+        assert_eq!(project.project_id, "g-p-123-opensource");
+        assert_eq!(
+            project.url,
+            "https://chatgpt.com/g/g-p-123-opensource/project"
+        );
+    }
+
+    #[test]
+    fn rejects_non_project_navigation() {
+        let error = ChatGptProjectBinding::from_navigation_url(
+            "https://chatgpt.com/projects",
+            "OpenSource".into(),
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("did not navigate to a Project route"));
     }
 
     #[test]
