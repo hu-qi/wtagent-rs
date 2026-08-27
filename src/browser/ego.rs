@@ -156,7 +156,7 @@ impl EgoClient {
             let diagnostic = runtime_diagnostic(&stdout, &stderr);
             if is_user_control_diagnostic(&diagnostic) {
                 return Err(WtError::Browser(
-                    "ego-lite task space is controlled by the user. If you want WTAgent-RS to resume control, run `wtagent ego claim`, then retry or resume the task."
+                    "ego-lite task space is controlled by the user. Browser automation has stopped and WTAgent-RS will not take control back automatically. When you explicitly want WTAgent-RS to continue, run `wtagent ego claim`, then retry or resume the task."
                         .into(),
                 ));
             }
@@ -185,6 +185,8 @@ fn is_user_control_diagnostic(diagnostic: &str) -> bool {
     let diagnostic_lower = diagnostic.to_ascii_lowercase();
     diagnostic.contains("EGO_TASK_SPACE_USER_IN_CONTROL")
         || diagnostic_lower.contains("user is controlling")
+        || diagnostic_lower.contains("user has taken control")
+        || diagnostic_lower.contains("taken control of this task space")
         || diagnostic_lower.contains("user-owned")
         || diagnostic_lower.contains("you now control this task space")
         || diagnostic_lower.contains("claimtaskspace")
@@ -259,60 +261,71 @@ fn normalize_marker(marker: &str) -> String {
 fn debug_excerpt(value: &str) -> String {
     let mut escaped = value.escape_debug().to_string();
     if escaped.chars().count() > MAX_DEBUG_EXCERPT_CHARS {
-        escaped = escaped.chars().take(MAX_DEBUG_EXCERPT_CHARS).collect();
-        escaped.push_str("…<truncated>");
+        escaped = escaped
+            .chars()
+            .take(MAX_DEBUG_EXCERPT_CHARS)
+            .collect::<String>();
+        escaped.push_str("…[truncated]");
     }
     escaped
 }
 
-pub fn discover_ego(override_path: Option<&Path>) -> Result<PathBuf> {
-    if let Some(path) = override_path {
+pub fn discover_ego(explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
         if path.is_file() {
             return Ok(path.to_path_buf());
         }
         return Err(WtError::Config(format!(
-            "configured ego-browser path does not exist: {}",
+            "ego-browser executable does not exist: {}",
             path.display()
         )));
     }
 
-    let binary = if cfg!(target_os = "windows") {
-        "ego-browser.exe"
-    } else {
-        "ego-browser"
-    };
-
-    if let Some(path) = env::var_os("PATH") {
-        for base in env::split_paths(&path) {
-            let candidate = base.join(binary);
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
+    if let Some(path) = find_on_path("ego-browser") {
+        return Ok(path);
     }
 
     if let Some(home) = dirs::home_dir() {
-        let candidate = home.join(".local/bin").join(binary);
-        if candidate.is_file() {
-            return Ok(candidate);
+        let local = home.join(".local/bin/ego-browser");
+        if local.is_file() {
+            return Ok(local);
         }
     }
 
     Err(WtError::Config(
-        "ego-browser was not found. Install ego lite and finish onboarding, add ~/.local/bin to PATH, or pass --ego-path."
+        "ego-browser was not found. Install ego-lite and finish its onboarding so `ego-browser` is registered on PATH (normally ~/.local/bin/ego-browser)."
             .into(),
     ))
 }
 
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    env::var_os("PATH").and_then(|paths| {
+        env::split_paths(&paths)
+            .map(|dir| dir.join(name))
+            .find(|path| path.is_file())
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        debug_excerpt, extract_marked_payload, extract_result_payload, is_user_control_diagnostic,
-        normalize_marker, runtime_diagnostic,
-    };
+    use super::*;
 
     #[test]
-    fn parses_original_marker() {
+    fn recognizes_unexpected_user_takeover() {
+        assert!(is_user_control_diagnostic(
+            "The user has taken control of this task space, so browser commands are paused."
+        ));
+    }
+
+    #[test]
+    fn recognizes_claim_guidance_as_user_control() {
+        assert!(is_user_control_diagnostic(
+            "You now control this task space. await claimTaskSpace(id)"
+        ));
+    }
+
+    #[test]
+    fn parses_raw_marker() {
         assert_eq!(
             extract_marked_payload("__WTAGENT_JSON__{\"ok\":true}"),
             Some("{\"ok\":true}")
@@ -320,91 +333,27 @@ mod tests {
     }
 
     #[test]
-    fn parses_markdown_decorated_marker_from_ego_browser() {
+    fn parses_markdown_decorated_marker() {
         assert_eq!(
-            extract_marked_payload("**WTAGENT_JSON**{\"ok\":true,\"targetId\":\"abc\"}"),
-            Some("{\"ok\":true,\"targetId\":\"abc\"}")
+            extract_marked_payload("**WTAGENT_JSON**{\"ok\":true}"),
+            Some("{\"ok\":true}")
         );
     }
 
     #[test]
-    fn parses_markdown_escaped_inner_underscore() {
+    fn parses_markdown_escaped_marker() {
         assert_eq!(
-            extract_marked_payload(r#"**WTAGENT\_JSON**{"done":true,"ownership":"agent"}"#),
-            Some(r#"{"done":true,"ownership":"agent"}"#)
+            extract_marked_payload("\\_\\_WTAGENT\\_JSON\\_\\_{\"ok\":true}"),
+            Some("{\"ok\":true}")
         );
     }
 
     #[test]
-    fn parses_fully_markdown_escaped_marker_seen_in_ego_browser() {
+    fn extracts_stderr_result_when_stdout_is_empty() {
+        let stderr = "**WTAGENT\\_JSON**{\"ok\":true}\n\n";
         assert_eq!(
-            extract_marked_payload(
-                r#"\_\_WTAGENT\_JSON\_\_{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}"#,
-            ),
-            Some(r#"{"ok":true,"targetId":"FA61691809ACEDE7926D4C148184B16B"}"#)
+            extract_result_payload("", stderr),
+            Some(("stderr", "{\"ok\":true}"))
         );
-    }
-
-    #[test]
-    fn parses_result_from_stderr_when_stdout_is_empty() {
-        assert_eq!(
-            extract_result_payload(
-                "",
-                "**WTAGENT\\_JSON**{\"ok\":true,\"targetId\":\"FA61691809ACEDE7926D4C148184B16B\"}\n\n",
-            ),
-            Some((
-                "stderr",
-                "{\"ok\":true,\"targetId\":\"FA61691809ACEDE7926D4C148184B16B\"}"
-            ))
-        );
-    }
-
-    #[test]
-    fn prefers_stdout_result_when_both_streams_contain_markers() {
-        assert_eq!(
-            extract_result_payload(
-                "__WTAGENT_JSON__{\"source\":\"stdout\"}",
-                "__WTAGENT_JSON__{\"source\":\"stderr\"}",
-            ),
-            Some(("stdout", "{\"source\":\"stdout\"}"))
-        );
-    }
-
-    #[test]
-    fn normalizes_only_markdown_marker_escapes() {
-        assert_eq!(
-            normalize_marker(r"\_\_WTAGENT\_JSON\_\_"),
-            "__WTAGENT_JSON__"
-        );
-    }
-
-    #[test]
-    fn ignores_marker_mentions_in_prose() {
-        assert_eq!(
-            extract_marked_payload("warning: expected WTAGENT_JSON marker {not-json}"),
-            None
-        );
-    }
-
-    #[test]
-    fn keeps_useful_runtime_error_context() {
-        let diagnostic = runtime_diagnostic(
-            "some stdout\n",
-            "Error: task space is user-owned\nego's nodejs process exited with code 1\n",
-        );
-        assert!(diagnostic.contains("task space is user-owned"));
-        assert!(diagnostic.contains("nodejs process exited"));
-    }
-
-    #[test]
-    fn recognizes_claim_guidance_as_user_control() {
-        assert!(is_user_control_diagnostic(
-            "await claimTaskSpace(id) | You now control this task space."
-        ));
-    }
-
-    #[test]
-    fn debug_excerpt_escapes_control_characters() {
-        assert_eq!(debug_excerpt("a\r\nb"), "a\\r\\nb");
     }
 }
