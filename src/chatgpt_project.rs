@@ -175,7 +175,10 @@ async fn wait_for_project_directory(page: &ChromePage) -> Result<()> {
     while tokio::time::Instant::now() < deadline {
         let names = project_row_names(page).await?;
         if !names.is_empty() {
-            debug!(count = names.len(), "ChatGPT Project directory rows are ready");
+            debug!(
+                count = names.len(),
+                "ChatGPT Project directory rows are ready"
+            );
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -287,7 +290,8 @@ async fn wait_for_project_navigation(
     let mut last_url = String::new();
     while tokio::time::Instant::now() < deadline {
         last_url = page.cdp.current_url().await.unwrap_or_default();
-        if let Ok(binding) = ChatGptProjectBinding::from_navigation_url(&last_url, name.to_string()) {
+        if let Ok(binding) = ChatGptProjectBinding::from_navigation_url(&last_url, name.to_string())
+        {
             return Ok(binding);
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -448,7 +452,9 @@ mod tests {
             "OpenSource".into(),
         )
         .unwrap_err();
-        assert!(error.to_string().contains("did not navigate to a Project route"));
+        assert!(error
+            .to_string()
+            .contains("did not navigate to a Project route"));
     }
 
     #[test]
