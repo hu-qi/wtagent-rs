@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::debug;
 use url::Url;
 
 use crate::{
@@ -50,6 +51,19 @@ impl ChatGptProjectBinding {
             project_id: segments[1].to_string(),
         })
     }
+
+    fn from_project_id(project_id: &str, name: Option<String>) -> Result<Self> {
+        if !project_id.starts_with("g-p-") || project_id.contains('/') {
+            return Err(WtError::Browser(format!(
+                "invalid ChatGPT Project id discovered in page: {project_id:?}"
+            )));
+        }
+        Ok(Self {
+            name,
+            url: format!("https://chatgpt.com/g/{project_id}/project"),
+            project_id: project_id.to_string(),
+        })
+    }
 }
 
 pub async fn resolve_chatgpt_project(
@@ -77,7 +91,7 @@ pub async fn resolve_chatgpt_project(
     match matches.as_slice() {
         [project] => Ok(project.clone()),
         [] => Err(WtError::Config(format!(
-            "ChatGPT Project {wanted:?} was not found. Run `wtagent chatgpt projects` to list visible projects, or pass the project URL directly."
+            "ChatGPT Project {wanted:?} was not found by exact name. Run `wtagent chatgpt projects` to inspect visible projects, or pass the project URL directly."
         ))),
         _ => Err(WtError::Config(format!(
             "multiple ChatGPT Projects are named {wanted:?}; pass the exact project URL instead"
@@ -97,10 +111,14 @@ pub async fn list_chatgpt_projects(config: &AppConfig) -> Result<Vec<ChatGptProj
     )
     .await?;
 
+    let current_url = page.cdp.current_url().await.unwrap_or_default();
+    debug!(url = %current_url, "ChatGPT Project discovery page ready");
+
     let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
     let mut last = Vec::new();
     while tokio::time::Instant::now() < deadline {
         last = discover_projects(&page).await?;
+        debug!(count = last.len(), "ChatGPT Project discovery pass completed");
         if !last.is_empty() {
             return Ok(last);
         }
@@ -122,33 +140,58 @@ async fn discover_projects(page: &ChromePage) -> Result<Vec<ChatGptProjectBindin
         .cdp
         .evaluate(
             r#"(() => {
-                const seen = new Set();
-                const output = [];
-                for (const a of document.querySelectorAll('a[href*="/g/g-p-"]')) {
+                const candidates = new Map();
+                const add = (rawUrl, rawName, score) => {
+                    if (!rawUrl) return;
                     let u;
-                    try { u = new URL(a.href, location.origin); } catch { continue; }
-                    if (u.origin !== 'https://chatgpt.com') continue;
-                    if (!/^\/g\/g-p-[^/]+\/project\/?$/.test(u.pathname)) continue;
-                    u.search = '';
-                    u.hash = '';
-                    const href = u.href.replace(/\/$/, '');
-                    if (seen.has(href)) continue;
-                    seen.add(href);
-                    const raw = (
-                        a.getAttribute('aria-label') ||
-                        a.getAttribute('title') ||
-                        a.textContent ||
-                        ''
-                    );
-                    const name = raw.replace(/\s+/g, ' ').trim();
+                    try { u = new URL(rawUrl, location.origin); } catch { return; }
+                    if (u.origin !== 'https://chatgpt.com') return;
                     const parts = u.pathname.split('/').filter(Boolean);
-                    output.push({
-                        name: name || null,
-                        url: href,
-                        project_id: parts[1]
-                    });
+                    if (parts.length < 2 || parts[0] !== 'g' || !parts[1].startsWith('g-p-')) return;
+                    const projectId = parts[1];
+                    const canonical = `https://chatgpt.com/g/${projectId}/project`;
+                    const name = (rawName || '').replace(/\s+/g, ' ').trim() || null;
+                    const previous = candidates.get(projectId);
+                    if (!previous || score > previous.score || (score === previous.score && !previous.name && name)) {
+                        candidates.set(projectId, { name, url: canonical, project_id: projectId, score });
+                    }
+                };
+
+                for (const el of document.querySelectorAll('[href]')) {
+                    const href = el.getAttribute('href');
+                    if (!href || !href.includes('/g/g-p-')) continue;
+                    const text =
+                        el.getAttribute('aria-label') ||
+                        el.getAttribute('title') ||
+                        el.textContent ||
+                        '';
+                    let score = 1;
+                    try {
+                        const path = new URL(href, location.origin).pathname;
+                        if (/^\/g\/g-p-[^/]+\/project\/?$/.test(path)) score = 3;
+                        else if (el.tagName === 'A') score = 2;
+                    } catch {}
+                    add(href, text, score);
                 }
-                return output;
+
+                // React/Next may keep route hrefs in rendered data before they become
+                // concrete anchors. Discover project ids from the live HTML as a
+                // fallback; names are intentionally left unset in this path.
+                const html = document.documentElement?.innerHTML || '';
+                const patterns = [
+                    /\/g\/(g-p-[A-Za-z0-9_-]+)\/(?:project|c\/[^\"'<>\\\s]+)/g,
+                    /\\\/g\\\/(g-p-[A-Za-z0-9_-]+)\\\/(?:project|c\\\/[^\"'<>\\\s]+)/g
+                ];
+                for (const re of patterns) {
+                    let match;
+                    while ((match = re.exec(html)) !== null) {
+                        add(`/g/${match[1]}/project`, null, 0);
+                    }
+                }
+
+                return [...candidates.values()]
+                    .map(({score, ...project}) => project)
+                    .sort((a, b) => (a.name || '').localeCompare(b.name || '') || a.url.localeCompare(b.url));
             })()"#,
         )
         .await?;
@@ -161,14 +204,17 @@ fn projects_from_value(value: Value) -> Result<Vec<ChatGptProjectBinding>> {
     })?;
     let mut projects = Vec::with_capacity(array.len());
     for item in array {
-        let url = item.get("url").and_then(Value::as_str).unwrap_or_default();
-        let mut binding = ChatGptProjectBinding::from_url(url)?;
-        binding.name = item
+        let project_id = item
+            .get("project_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let name = item
             .get("name")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(ToOwned::to_owned);
+        let binding = ChatGptProjectBinding::from_project_id(project_id, name)?;
         projects.push(binding);
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.url.cmp(&b.url)));
@@ -201,6 +247,21 @@ mod tests {
         assert_eq!(
             project.url,
             "https://chatgpt.com/g/g-p-6a0be51c7d58819182a98476d1424347-demo/project"
+        );
+    }
+
+    #[test]
+    fn builds_canonical_project_from_nested_discovery() {
+        let value = serde_json::json!([{
+            "name": "OpenSource",
+            "url": "https://chatgpt.com/g/g-p-123-opensource/project",
+            "project_id": "g-p-123-opensource"
+        }]);
+        let projects = projects_from_value(value).unwrap();
+        assert_eq!(projects[0].name.as_deref(), Some("OpenSource"));
+        assert_eq!(
+            projects[0].url,
+            "https://chatgpt.com/g/g-p-123-opensource/project"
         );
     }
 
