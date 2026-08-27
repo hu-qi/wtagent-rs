@@ -118,7 +118,10 @@ pub async fn list_chatgpt_projects(config: &AppConfig) -> Result<Vec<ChatGptProj
     let mut last = Vec::new();
     while tokio::time::Instant::now() < deadline {
         last = discover_projects(&page).await?;
-        debug!(count = last.len(), "ChatGPT Project discovery pass completed");
+        debug!(
+            count = last.len(),
+            "ChatGPT Project discovery pass completed"
+        );
         if !last.is_empty() {
             return Ok(last);
         }
